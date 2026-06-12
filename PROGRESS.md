@@ -17,7 +17,7 @@ Last updated: 2026-06-12
 - [x] Phase 10: Creature AI, threat events and pathfinding.
 - [x] Phase 11: Floor 1 objective and workshop transition.
 - [x] Phase 12: Floor 2 security objective.
-- [ ] Phase 13: Floor 3 Echo Core extraction and victory.
+- [x] Phase 13: Floor 3 Echo Core extraction and victory.
 - [ ] Phase 14: Workshop, recipes and two active module slots.
 - [ ] Phase 15: Shock Pulse and Decoy Beacon.
 - [ ] Phase 16: Door Wedge and Scan Projector.
@@ -625,3 +625,77 @@ Last updated: 2026-06-12
 - `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average 15.390 ms, median 14.976 ms and maximum 20.859 ms in this container run.
 - `python -m py_compile ...` and `python -c "import main"`: passed.
 
+
+## Phase 13 Notes
+
+- Added progression from the Floor 2 WORKSHOP through `FLOOR_TRANSITION` into Floor 3 while preserving run seed, score, material counters, elapsed time and completed-floor summaries.
+- Added `Floor3ObjectiveState` and `Floor3ObjectiveSystem` in `game/systems/floor3_objectives.py`.
+- Added scan-detectable containment component, containment control and Echo Core entities with cached state-specific outlines.
+- Floor 3 begins powered with two creatures, one locked containment door and a locked elevator.
+- The containment component and control are placed deterministically on the public side of the selected containment gate. The Echo Core is placed in a deterministic containment-side room.
+- Holding F for 2.0 seconds at the ready control installs the component, awards score, unlocks the containment door and emits exactly one `CONTAINMENT_CONTROL` threat event.
+- Echo Core collection awards score, emits exactly one stronger `ECHO_CORE` threat event, unlocks the elevator, accelerates existing creatures and deterministically adds a third creature when a free validated spawn exists.
+- Returning to the elevator after core collection awards the final floor score, archives the Floor 3 summary, clears runtime systems and enters `VICTORY`.
+- Victory displays time, score, seed, completed floors and retained materials. New Run and Main Menu preserve the existing reset rules.
+- Floor 3 death still follows the one-life rule: Retry Same Seed restarts the complete run at Floor 1.
+
+## Phase 13 Placement Diagnostics
+
+- Seed `12345`, Floor 3 generation attempt `2`.
+- Containment gate edge `(4, 13)`.
+- Public-side rooms `(4,)`.
+- Containment-side rooms `(0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13)`.
+- Containment component `f3-a2-containment-component-16-8`, room `4`, tile `(16, 8)`.
+- Containment control `f3-a2-containment-control-20-8`, room `4`, tile `(20, 8)`.
+- Containment door `f3-a2-02-containment-18-10`, tile `(18, 10)`.
+- Echo Core `f3-a2-echo-core-37-10`, room `5`, tile `(37, 10)`.
+- Placement validation errors: `[]`.
+- Extraction preview creature count: `2` before extraction and `3` during extraction.
+- Threat event IDs: containment control `1`, Echo Core `2`.
+- Final deterministic preview score: `2075`.
+
+## Phase 13 Created Or Updated Files
+
+- Created `game/systems/floor3_objectives.py`.
+- Created `tests/test_floor3_objectives.py`.
+- Created `tools/floor3_preview.py`.
+- Updated `game/entities/objectives.py` and exports.
+- Updated `game/app.py`, `game/settings.py` and system exports.
+- Updated `game/systems/floor_objectives.py` and `game/systems/threat_events.py`.
+- Updated `game/world/door_generation.py` so Floor 3 uses one authoritative containment gate without an additional required security gate.
+- Updated Floor 2 transition regression coverage and `tools/smoke_test.py` for the complete three-floor run.
+- Updated `README.md`, `IMPLEMENTATION_PLAN.md` and `PROGRESS.md`.
+
+## Phase 13 Test Results
+
+- `python -m unittest discover -s tests`: passed with `371` tests in `27.913s` in the isolated container environment.
+- `python tools/smoke_test.py`: passed, including Floor 1, Floor 2, Floor 3 and final VICTORY flow.
+- `python tools/floor1_preview.py --seed 12345 --headless`: passed with WORKSHOP cleanup intact.
+- `python tools/floor2_preview.py --seed 12345 --headless`: passed with WORKSHOP cleanup intact.
+- `python tools/floor3_preview.py --seed 12345 --headless`: passed and produced all Floor 3/Victory screenshots.
+- `python tools/ai_preview.py --seed 12345 --floor 3 --headless`: passed; `PATROL -> INVESTIGATE -> SEARCH -> CHASE -> STUNNED`, A* throttled and reset cleanup true.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average `12.114 ms`, median `11.703 ms`, maximum `16.017 ms` in this container run.
+- `python -m py_compile main.py`: passed.
+- `python -c "import main; print('main import ok')"`: passed.
+- `python -m compileall -q main.py game tests tools`: passed.
+- The 450-floor generation stress test remains to be rerun manually on the target Windows machine with `python tools/generation_test.py` because it is the intentionally long verification command.
+
+## Phase 13 Preview Outputs
+
+- `artifacts/floor3_preview_12345_initial.png`
+- `artifacts/floor3_preview_12345_component.png`
+- `artifacts/floor3_preview_12345_component_collected.png`
+- `artifacts/floor3_preview_12345_control_progress.png`
+- `artifacts/floor3_preview_12345_containment_open.png`
+- `artifacts/floor3_preview_12345_echo_core.png`
+- `artifacts/floor3_preview_12345_extraction.png`
+- `artifacts/floor3_preview_12345_elevator.png`
+- `artifacts/floor3_preview_12345_victory.png`
+
+## Phase 13 Known Limitations
+
+- Workshop crafting remains a placeholder.
+- Active Shock Pulse, Decoy Beacon, Door Wedge and Scan Projector gameplay remain future phases.
+- Objective feedback uses scan echoes, contact hints, contextual messages and state animations; a separate particle system is not implemented.
+- Score values are centralised and functional but not final-balanced.
+- The generated room graph is the authoritative containment partition for objective placement; the core remains explicitly non-collectable until containment control activation even if decorative raster corridors visually overlap elsewhere in the map.

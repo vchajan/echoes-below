@@ -166,3 +166,14 @@ Static geometry is raycast once when Space is pressed, never every frame. The ac
 - Each relay activation is constant-time, awards score once, emits exactly one `RELAY` threat event and then becomes inert for repeated activation attempts.
 - Floor 2 completion uses the same `_clear_floor_runtime()` cleanup path as Floor 1, preserving run-level summaries, score, seed, elapsed time and materials while clearing objectives, relays, keycard, doors, creatures, scans, snapshots and threats.
 - The one-life rule remains unchanged: death on Floor 2 ends the whole run, and Retry Same Seed restarts deterministically at Floor 1.
+
+
+## Phase 13 Floor 3 And Victory Architecture Notes
+
+- `game/entities/objectives.py` now includes `ContainmentComponentPickup`, `ContainmentControlEntity`, `ContainmentControlState` and `EchoCorePickup`. All expose stable world-space scan data and cached historical outline frames.
+- `game/systems/floor3_objectives.py` owns Floor 3 state, deterministic containment-gate placement, component collection, held-F control installation, containment-door unlock, Echo Core extraction, objective messages and elevator completion.
+- Floor 3 uses one authoritative containment door. Floor 3 door generation no longer places a required security door in parallel with the containment objective.
+- Containment-control installation emits one `CONTAINMENT_CONTROL` threat. Echo Core collection emits one stronger `ECHO_CORE` threat, unlocks the elevator and requests the extraction danger escalation from `Game`.
+- `Game._start_extraction_phase()` accelerates existing creatures and adds one deterministic third creature if a validated unused spawn is available. It is idempotent.
+- Floor 3 completion archives the final run summary, clears all active floor runtime systems and transitions directly to `VICTORY`, not WORKSHOP.
+- The one-life rule remains unchanged: death on Floor 3 ends the full run, and Retry Same Seed restarts deterministically at Floor 1.

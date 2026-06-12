@@ -13,6 +13,7 @@ class ThreatSourceType(Enum):
     PLAYER_SCAN = auto()
     GENERATOR = auto()
     RELAY = auto()
+    CONTAINMENT_CONTROL = auto()
     ECHO_CORE = auto()
     SHOCK_PULSE = auto()
     DECOY_BEACON = auto()

@@ -13,6 +13,7 @@ from game.entities.player import Player, movement_direction_from_bools
 from game import settings
 from game.systems.creature_ai import CreatureAI, CreatureState
 from game.systems.floor_objectives import Floor1ObjectiveSystem, Floor2ObjectiveSystem
+from game.systems.floor3_objectives import Floor3ObjectiveSystem
 from game.systems.scan import ScanRenderer, ScanSystem
 from game.systems.snapshots import EchoSnapshotRenderer, EchoSnapshotSystem
 from game.systems.threat_events import ThreatEventSystem
@@ -65,7 +66,7 @@ class Game:
         self.camera: Camera | None = None
         self.doors: list[DynamicDoor] = []
         self.floor_content: FloorContent | None = None
-        self.floor_objectives: Floor1ObjectiveSystem | Floor2ObjectiveSystem | None = None
+        self.floor_objectives: Floor1ObjectiveSystem | Floor2ObjectiveSystem | Floor3ObjectiveSystem | None = None
         self.material_pickups: list[MaterialPickup] = []
         self.elevator_entity: ElevatorEntity | None = None
         self.creatures: list[Creature] = []
@@ -319,8 +320,12 @@ class Game:
                     self.floor_preview_surface = None
                     self.transition_to(GameState.FLOOR_TRANSITION)
                     return
-                if self.last_completed_floor == 2:
-                    self.workshop_notice = "Floor 3 will be enabled in a later phase"
+                if self.placeholder_run is not None and self.last_completed_floor == 2:
+                    self.placeholder_run.floor = 3
+                    self.placeholder_run.generated_floor = None
+                    self.floor_world_surface = None
+                    self.floor_preview_surface = None
+                    self.transition_to(GameState.FLOOR_TRANSITION)
                     return
                 self.workshop_notice = "Crafting will be enabled in a later phase"
                 return
@@ -458,8 +463,12 @@ class Game:
                 self.floor_power_available = True
                 for door in self.doors:
                     door.set_powered(True)
+            if objective_result.extraction_started:
+                self._start_extraction_phase()
             if objective_result.floor_completed:
-                if self.placeholder_run.floor == 2:
+                if self.placeholder_run.floor == 3:
+                    self.complete_floor_three()
+                elif self.placeholder_run.floor == 2:
                     self.complete_floor_two()
                 else:
                     self.complete_floor_one()
@@ -554,6 +563,8 @@ class Game:
     def start_new_run(self) -> None:
         self.death_creature_id = None
         self.death_world_position = None
+        self.last_completed_floor = None
+        self.workshop_notice = "Crafting will be enabled in a later phase"
         self.next_seed += 1
         self.placeholder_run = PlaceholderRun(seed=self.next_seed)
         self.run_exists = True
@@ -563,6 +574,8 @@ class Game:
     def restart_placeholder_run(self) -> None:
         self.death_creature_id = None
         self.death_world_position = None
+        self.last_completed_floor = None
+        self.workshop_notice = "Crafting will be enabled in a later phase"
         if self.placeholder_run is None:
             self.placeholder_run = PlaceholderRun(seed=self.next_seed)
         else:
@@ -676,6 +689,17 @@ class Game:
                 self.doors,
                 reserved_tiles=objective_reserved,
             )
+        elif generated_floor.floor_number == 3:
+            objective_reserved = {pickup.tile for pickup in self.material_pickups}
+            objective_reserved.update(door.tile for door in self.doors)
+            objective_reserved.update(generated_floor.candidate_creature_spawns)
+            self.floor_objectives = Floor3ObjectiveSystem.create_for_floor(
+                generated_floor,
+                self.assets,
+                settings.TILE_SIZE,
+                self.doors,
+                reserved_tiles=objective_reserved,
+            )
         else:
             self.floor_objectives = None
         
@@ -758,6 +782,69 @@ class Game:
         self.workshop_notice = "Crafting will be enabled in a later phase"
         self._clear_floor_runtime()
         self.transition_to(GameState.WORKSHOP)
+
+
+    def complete_floor_three(self) -> None:
+        if self.placeholder_run is None:
+            return
+        summary = {
+            "floor": 3,
+            "containment_component_recovered": True,
+            "containment_control_active": True,
+            "echo_core_recovered": True,
+            "extraction_completed": True,
+            "score": self.placeholder_run.score,
+            "materials": dict(self.placeholder_run.material_counts),
+            "elapsed_time": self.placeholder_run.elapsed_time,
+        }
+        self.last_completed_floor = 3
+        self.placeholder_run.completed_floor_count = max(self.placeholder_run.completed_floor_count, 3)
+        self.placeholder_run.floor_completion_summaries[3] = summary
+        self._clear_floor_runtime()
+        self.transition_to(GameState.VICTORY)
+
+    def _start_extraction_phase(self) -> None:
+        if self.placeholder_run is None or self.placeholder_run.generated_floor is None:
+            return
+        if not isinstance(self.floor_objectives, Floor3ObjectiveSystem):
+            return
+        if self.floor_objectives.state.extraction_creature_spawned:
+            return
+        for creature in self.creatures:
+            creature.speed *= settings.EXTRACTION_CREATURE_SPEED_MULTIPLIER
+
+        floor = self.placeholder_run.generated_floor
+        occupied = {creature.spawn_tile for creature in self.creatures}
+        reserved = {floor.player_spawn, floor.elevator_tile}
+        reserved.update(pickup.tile for pickup in self.material_pickups)
+        reserved.update(door.tile for door in self.doors)
+        reserved.update(
+            getattr(entity, "tile", (-1, -1))
+            for entity in self.floor_objectives.active_entities
+        )
+        spawn_tile = next(
+            (tile for tile in floor.candidate_creature_spawns if tile not in occupied and tile not in reserved),
+            None,
+        )
+        if spawn_tile is not None:
+            index = len(self.creatures)
+            creature_seed = floor.attempt_seed + floor.floor_number * 1_000_003 + index * 97_409
+            creature = Creature(
+                f"f3-a{floor.generation_attempt}-creature-{index:02d}",
+                spawn_tile,
+                self.assets,
+                settings.TILE_SIZE,
+                random.Random(creature_seed),
+                speed=settings.CREATURE_SPEED * settings.EXTRACTION_CREATURE_SPEED_MULTIPLIER,
+            )
+            creature.ai = CreatureAI(
+                creature,
+                random.Random(creature_seed + 51_337),
+                floor_number=3,
+                creature_index=index,
+            )
+            self.creatures.append(creature)
+        self.floor_objectives.mark_extraction_creature_spawned()
 
     def _clear_floor_runtime(self) -> None:
         self.player = None
@@ -1098,6 +1185,33 @@ class Game:
                                 ),
                             ]
                         )
+                    elif state.floor_number == 3:
+                        debug_lines.extend(
+                            [
+                                (
+                                    f"Floor3 objective: {state.current_objective_text} | "
+                                    f"component {state.component_collected} control {state.control_active} core {state.echo_core_collected}"
+                                ),
+                                (
+                                    f"Gate {placement.containment_gate_edge} | public {list(placement.public_side_room_ids)} "
+                                    f"containment {list(placement.containment_side_room_ids)}"
+                                ),
+                                (
+                                    f"Containment {placement.containment_door_id} "
+                                    f"{self.floor_objectives.containment_door.state.name} tile {placement.containment_door_tile}"
+                                ),
+                                (
+                                    f"Component r{placement.component_room_id} {placement.component_tile} | "
+                                    f"Control r{placement.control_room_id} {placement.control_tile} | "
+                                    f"Core r{placement.core_room_id} {placement.core_tile}"
+                                ),
+                                (
+                                    f"Install {state.control_progress:0.2f}/{settings.CONTAINMENT_INSTALL_DURATION:0.2f} | "
+                                    f"threats {state.containment_threat_event_id},{state.echo_core_threat_event_id} | "
+                                    f"extraction {state.extraction_active}"
+                                ),
+                            ]
+                        )
                 self.draw_text_lines(debug_lines, 16, 112, 24)
 
         self.draw_gameplay_hud()
@@ -1179,8 +1293,20 @@ class Game:
         run = self.placeholder_run
         final_time = run.elapsed_time if run is not None else 0.0
         score = run.score if run is not None else 0
-        self.draw_centered_text("ECHO RECOVERED", "title", settings.COLOR_SUCCESS, 180)
-        self.draw_centered_text(f"Final time {final_time:0.1f}s | Score {score}", "body", settings.COLOR_TEXT_MUTED, 275)
+        seed = run.seed if run is not None else self.next_seed
+        floors = run.completed_floor_count if run is not None else 0
+        materials = run.material_counts if run is not None else {}
+        self.draw_centered_text("ECHO RECOVERED", "title", settings.COLOR_SUCCESS, 150)
+        self.draw_centered_text("Extraction successful", "subtitle", settings.COLOR_ACCENT, 235)
+        self.draw_centered_text(
+            f"Time {final_time:0.1f}s | Score {score} | Seed {seed}",
+            "body", settings.COLOR_TEXT_MUTED, 295
+        )
+        self.draw_centered_text(
+            f"Floors {floors}/3 | Materials S:{materials.get('scrap', 0)} "
+            f"C:{materials.get('circuit', 0)} P:{materials.get('power_cell', 0)}",
+            "small", settings.COLOR_TEXT_MUTED, 335
+        )
         self.draw_button_group(GameState.VICTORY)
 
     def draw_background(self) -> None:
@@ -1233,7 +1359,12 @@ class Game:
         prompt_line = ""
         if self.floor_objectives is not None:
             state = self.floor_objectives.state
-            heading = "SECURITY OVERRIDE" if state.floor_number == 2 else "RESTORE POWER"
+            if state.floor_number == 3:
+                heading = "ECHO CORE EXTRACTION"
+            elif state.floor_number == 2:
+                heading = "SECURITY OVERRIDE"
+            else:
+                heading = "RESTORE POWER"
             objective_lines = [
                 heading,
                 state.current_objective_text,
@@ -1267,7 +1398,7 @@ class Game:
         pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, panel, width=1, border_radius=6)
         self.screen.blit(self.overlay_surface, (0, 0))
         for index, line in enumerate(hud_lines):
-            color = settings.COLOR_ACCENT if line in ("RESTORE POWER", "SECURITY OVERRIDE") else (
+            color = settings.COLOR_ACCENT if line in ("RESTORE POWER", "SECURITY OVERRIDE", "ECHO CORE EXTRACTION") else (
                 settings.COLOR_TEXT if index < 4 else settings.COLOR_TEXT_MUTED
             )
             self.screen.blit(font.render(line, True, color), (24, 24 + index * 24))
@@ -1285,13 +1416,18 @@ class Game:
                 return
             duration = settings.GENERATOR_REPAIR_DURATION
             label_text = f"Repairing generator {min(100.0, state.interaction_progress / duration * 100):0.0f}%"
-        else:
+        elif state.floor_number == 2:
             duration = settings.RELAY_ACTIVATION_DURATION
             relay_label = "relay"
             relay = getattr(self.floor_objectives, "_relay_by_id", lambda _: None)(state.active_relay_id)
             if relay is not None:
                 relay_label = f"Relay {relay.label}"
             label_text = f"Activating {relay_label} {min(100.0, state.interaction_progress / duration * 100):0.0f}%"
+        else:
+            if state.control_active:
+                return
+            duration = settings.CONTAINMENT_INSTALL_DURATION
+            label_text = f"Installing component {min(100.0, state.interaction_progress / duration * 100):0.0f}%"
         fraction = max(0.0, min(1.0, state.interaction_progress / duration))
         panel = pygame.Rect(settings.WINDOW_WIDTH // 2 - 180, settings.WINDOW_HEIGHT - 88, 360, 42)
         fill_rect = pygame.Rect(panel.left + 10, panel.bottom - 18, int((panel.width - 20) * fraction), 8)
@@ -1453,6 +1589,23 @@ class Game:
                             f"powered {state.floor_power_active} elevator {state.elevator_unlocked} | "
                             f"objective entities {len(self.floor_objectives.active_entities)} | "
                             f"relay events {state.relay_activation_event_count}"
+                        ),
+                    ]
+                )
+            elif state.floor_number == 3:
+                lines.extend(
+                    [
+                        (
+                            f"F3 objective {state.current_objective_text} | component {state.component_collected} "
+                            f"control {state.control_active} core {state.echo_core_collected}"
+                        ),
+                        (
+                            f"install {state.control_progress:0.2f}/{settings.CONTAINMENT_INSTALL_DURATION:0.2f} | "
+                            f"extraction {state.extraction_active} elevator {state.elevator_unlocked}"
+                        ),
+                        (
+                            f"objective entities {len(self.floor_objectives.active_entities)} | "
+                            f"containment events {state.containment_event_count} core events {state.echo_core_event_count}"
                         ),
                     ]
                 )

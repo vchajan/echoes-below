@@ -2,6 +2,10 @@
 
 from game.entities.door import DoorState, DoorType, DynamicDoor
 from game.entities.objectives import (
+    ContainmentComponentPickup,
+    ContainmentControlEntity,
+    ContainmentControlState,
+    EchoCorePickup,
     GeneratorComponentPickup,
     GeneratorEntity,
     GeneratorState,
@@ -15,6 +19,10 @@ __all__ = [
     "DoorState",
     "DoorType",
     "DynamicDoor",
+    "ContainmentComponentPickup",
+    "ContainmentControlEntity",
+    "ContainmentControlState",
+    "EchoCorePickup",
     "GeneratorComponentPickup",
     "GeneratorEntity",
     "GeneratorState",

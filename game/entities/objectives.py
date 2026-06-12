@@ -283,3 +283,174 @@ class RelayEntity(pygame.sprite.Sprite):
 
     def _rounded_center(self) -> tuple[int, int]:
         return (round(self.world_position.x), round(self.world_position.y))
+
+
+class ContainmentControlState(Enum):
+    INACTIVE = auto()
+    READY = auto()
+    INSTALLING = auto()
+    ACTIVE = auto()
+
+
+class ContainmentComponentPickup(AnimatedScanObject):
+    def __init__(
+        self,
+        component_id: str,
+        room_id: int,
+        tile: tuple[int, int],
+        assets: AssetManager,
+        tile_size: int,
+    ) -> None:
+        self.component_id = component_id
+        self.room_id = room_id
+        self.tile = tile
+        world_position = ((tile[0] + 0.5) * tile_size, (tile[1] + 0.5) * tile_size)
+        super().__init__(
+            entity_id=component_id,
+            category="containment_component",
+            world_position=world_position,
+            animation=assets.get_animation("containment_component", "pulse", looping=True),
+            outline_frames=assets.get_outline_frames(
+                "containment_component", "pulse", color=(255, 220, 80, 230)
+            ),
+            collision_size=(
+                settings.CONTAINMENT_COMPONENT_COLLISION_SIZE,
+                settings.CONTAINMENT_COMPONENT_COLLISION_SIZE,
+            ),
+        )
+        self.collected = False
+        self.score_value = settings.CONTAINMENT_COMPONENT_SCORE
+
+    def collect(self) -> bool:
+        if self.collected or not self.scan_active:
+            return False
+        self.collected = True
+        self.scan_active = False
+        self.kill()
+        return True
+
+
+class EchoCorePickup(AnimatedScanObject):
+    def __init__(
+        self,
+        core_id: str,
+        room_id: int,
+        tile: tuple[int, int],
+        assets: AssetManager,
+        tile_size: int,
+    ) -> None:
+        self.core_id = core_id
+        self.room_id = room_id
+        self.tile = tile
+        world_position = ((tile[0] + 0.5) * tile_size, (tile[1] + 0.5) * tile_size)
+        super().__init__(
+            entity_id=core_id,
+            category="echo_core",
+            world_position=world_position,
+            animation=assets.get_animation("echo_core", "pulse", looping=True),
+            outline_frames=assets.get_outline_frames(
+                "echo_core", "pulse", color=(118, 241, 173, 240)
+            ),
+            collision_size=(settings.ECHO_CORE_COLLISION_SIZE, settings.ECHO_CORE_COLLISION_SIZE),
+        )
+        self.collected = False
+        self.score_value = settings.ECHO_CORE_SCORE
+
+    def collect(self) -> bool:
+        if self.collected or not self.scan_active:
+            return False
+        self.collected = True
+        self.scan_active = False
+        self.kill()
+        return True
+
+
+class ContainmentControlEntity(pygame.sprite.Sprite):
+    def __init__(
+        self,
+        control_id: str,
+        room_id: int,
+        tile: tuple[int, int],
+        assets: AssetManager,
+        tile_size: int,
+        state: ContainmentControlState = ContainmentControlState.INACTIVE,
+    ) -> None:
+        super().__init__()
+        self.control_id = control_id
+        self.entity_id = control_id
+        self.scan_category = "containment_control"
+        self.room_id = room_id
+        self.tile = tile
+        self.tile_size = tile_size
+        self.world_position = pygame.Vector2((tile[0] + 0.5) * tile_size, (tile[1] + 0.5) * tile_size)
+        self.scan_active = True
+        self.state = state
+        self.install_progress = 0.0
+        self.install_duration = settings.CONTAINMENT_INSTALL_DURATION
+        self._animations = {
+            ContainmentControlState.INACTIVE: assets.get_animation("containment_control", "inactive", looping=True),
+            ContainmentControlState.READY: assets.get_animation("containment_control", "powered", looping=True),
+            ContainmentControlState.INSTALLING: assets.get_animation("containment_control", "powered", looping=True),
+            ContainmentControlState.ACTIVE: assets.get_animation("containment_control", "active", looping=True),
+        }
+        self._outlines = {
+            ContainmentControlState.INACTIVE: assets.get_outline_frames(
+                "containment_control", "inactive", color=(255, 104, 96, 220)
+            ),
+            ContainmentControlState.READY: assets.get_outline_frames(
+                "containment_control", "powered", color=(255, 220, 80, 230)
+            ),
+            ContainmentControlState.INSTALLING: assets.get_outline_frames(
+                "containment_control", "powered", color=(255, 220, 80, 240)
+            ),
+            ContainmentControlState.ACTIVE: assets.get_outline_frames(
+                "containment_control", "active", color=(118, 241, 173, 240)
+            ),
+        }
+        self.image = self._animations[self.state].current_frame
+        self.visual_rect = self.image.get_rect(center=self._rounded_center())
+        self.rect = self.visual_rect
+        self.interaction_rect = self._build_interaction_rect()
+
+    @property
+    def unique_id(self) -> str:
+        return self.control_id
+
+    @property
+    def scan_position(self) -> pygame.Vector2:
+        return self.world_position
+
+    @property
+    def animation_frame_index(self) -> int:
+        return self._animations[self.state].frame_index
+
+    def set_state(self, state: ContainmentControlState) -> None:
+        if state is self.state:
+            return
+        self.state = state
+        self._animations[state].reset()
+        self.image = self._animations[state].current_frame
+        self._sync_visual_rect()
+
+    def update(self, dt: float) -> None:
+        animation = self._animations[self.state]
+        animation.update(max(0.0, dt))
+        self.image = animation.current_frame
+        self._sync_visual_rect()
+
+    def capture_scan_outline(self) -> pygame.Surface:
+        animation = self._animations[self.state]
+        return self._outlines[self.state][animation.frame_index]
+
+    def _build_interaction_rect(self) -> pygame.Rect:
+        size = int(self.tile_size * settings.CONTAINMENT_INTERACTION_RADIUS_TILES * 2)
+        rect = pygame.Rect(0, 0, size, size)
+        rect.center = self._rounded_center()
+        return rect
+
+    def _sync_visual_rect(self) -> None:
+        self.visual_rect = self.image.get_rect(center=self._rounded_center())
+        self.rect = self.visual_rect
+
+    def _rounded_center(self) -> tuple[int, int]:
+        return (round(self.world_position.x), round(self.world_position.y))

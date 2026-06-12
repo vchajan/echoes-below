@@ -34,14 +34,17 @@ def create_doors_for_floor(
     security_tile: tuple[int, int] | None = None
     containment_tile: tuple[int, int] | None = None
 
-    if generated_floor.floor_number >= 2:
+    # Floor 2 uses one security gate. Floor 3 uses one containment gate.
+    # Keeping them on separate floors prevents a parallel doorway on the same
+    # corridor from bypassing the required objective gate.
+    if generated_floor.floor_number == 2:
         security_tile = _first_gate_tile(generated_floor, candidate_tiles)
         if security_tile is not None:
             door_types[security_tile] = DoorType.SECURITY
             selected[security_tile] = record_by_tile[security_tile]
 
     if generated_floor.floor_number >= 3:
-        containment_tile = _first_gate_tile(generated_floor, candidate_tiles - set(door_types))
+        containment_tile = _first_gate_tile(generated_floor, candidate_tiles)
         if containment_tile is not None:
             door_types[containment_tile] = DoorType.CONTAINMENT
             selected[containment_tile] = record_by_tile[containment_tile]
@@ -52,16 +55,17 @@ def create_doors_for_floor(
     rng.shuffle(ordered)
     ordered.sort(key=lambda record: _door_score(record, generated_floor, rng), reverse=True)
 
+    required_gate_edges = {record.edge for record in selected.values()}
     for record in ordered:
         if len(selected) >= powered_target:
             break
-        if record.tile in selected:
+        if record.tile in selected or record.edge in required_gate_edges:
             continue
         door_types[record.tile] = DoorType.POWERED
         selected[record.tile] = record
 
     for record in records:
-        if record.tile in selected:
+        if record.tile in selected or record.edge in required_gate_edges:
             continue
         if len(selected) >= powered_target:
             break
