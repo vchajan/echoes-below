@@ -141,6 +141,25 @@ def main() -> int:
 
         directions = movement_directions_from_spawn(game)
         require(len(directions) >= 2, "Spawn did not expose two test movement directions.")
+
+        scan_origin = game.player.world_position.copy()
+        require(game.trigger_scan(), "Space-equivalent scan trigger failed.")
+        require(game.scan_system.active_wave is not None, "Active scan wave was not created.")
+        game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
+        require(game.scan_system.active_wave.current_radius > 0, "Scan radius did not advance.")
+        step_gameplay(game, directions[0], frames=5)
+        require(game.scan_system.active_wave.origin == scan_origin, "Scan origin followed the moving player.")
+        paused_radius = game.scan_system.active_wave.current_radius
+        paused_cooldown = game.scan_system.cooldown_remaining
+        game.transition_to(GameState.PAUSED)
+        game.update(0.5)
+        require(game.scan_system.active_wave.current_radius == paused_radius, "Scan radius advanced while paused.")
+        require(game.scan_system.cooldown_remaining == paused_cooldown, "Scan cooldown advanced while paused.")
+        game.transition_to(GameState.PLAYING)
+        for _ in range(80):
+            game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
+        require(game.scan_system.traces, "Scan did not reveal static traces.")
+
         first_position = game.player.world_position.copy()
         step_gameplay(game, directions[0])
         require(
@@ -171,6 +190,10 @@ def main() -> int:
         require(game.debug_world_view, "F2 did not enable debug mode.")
         game.handle_keydown(pygame.K_F2)
         require(not game.debug_world_view, "F2 did not disable debug mode.")
+        game.handle_keydown(pygame.K_F3)
+        require(game.performance_overlay, "F3 did not enable the performance overlay.")
+        game.handle_keydown(pygame.K_F3)
+        require(not game.performance_overlay, "F3 did not disable the performance overlay.")
 
         door = find_powered_door(game)
         place_player_at(game, approach_tile_for_door(game, door))
@@ -213,6 +236,8 @@ def main() -> int:
         require(game.camera is not None and game.camera is not old_camera, "Restart did not create a fresh camera.")
         require(game.doors and all(door not in game.doors for door in old_doors), "Restart did not create fresh doors.")
         require(game.placeholder_run is not None and game.placeholder_run.restart_count == 1, "Restart count was not updated.")
+        require(game.scan_system.active_wave is None, "Restart retained an active scan wave.")
+        require(not game.scan_system.traces, "Restart retained scan traces.")
 
         game.request_quit()
         game.run_one_frame(1.0 / settings.FPS)

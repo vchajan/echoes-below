@@ -96,11 +96,13 @@ def build_local_glow_surface(radius: int) -> pygame.Surface:
     size = radius * 2
     surface = pygame.Surface((size, size), pygame.SRCALPHA)
     center = (radius, radius)
+    # Draw from a faint outer halo to a bright centre.  The surface is
+    # subtracted from the darkness overlay, so higher alpha means more light.
     rings = [
-        (radius, 248),
-        (int(radius * 0.76), 208),
-        (int(radius * 0.54), 144),
-        (int(radius * 0.34), 82),
+        (radius, 36),
+        (int(radius * 0.78), 88),
+        (int(radius * 0.56), 164),
+        (int(radius * 0.34), 238),
     ]
     for ring_radius, alpha in rings:
         pygame.draw.circle(surface, (0, 0, 0, alpha), center, ring_radius)
@@ -112,7 +114,7 @@ def apply_darkness(
     darkness_surface: pygame.Surface,
     glow_surface: pygame.Surface,
     player_screen_center: tuple[int, int],
-    darkness_alpha: int = 226,
+    darkness_alpha: int = 250,
 ) -> None:
     darkness_surface.fill((0, 0, 0, darkness_alpha))
     glow_rect = glow_surface.get_rect(center=player_screen_center)

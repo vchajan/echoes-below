@@ -7,6 +7,7 @@ from game.camera import Camera
 from game.entities.door import DoorType, DynamicDoor
 from game.entities.player import Player, movement_direction_from_bools
 from game import settings
+from game.systems.scan import ScanRenderer, ScanSystem
 from game.states import GameState, PlaceholderRun
 from game.ui.buttons import Button
 from game.world.blockers import DynamicBlockerRegistry
@@ -38,6 +39,10 @@ class Game:
         self.overlay_surface = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
         self.darkness_surface = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
         self.local_glow_surface = build_local_glow_surface(settings.LOCAL_VISIBILITY_RADIUS)
+        self.scan_system = ScanSystem()
+        self.scan_renderer = ScanRenderer(settings.WINDOW_SIZE)
+        self.performance_overlay = False
+        self.last_frame_dt = 0.0
         self.floor_generator = FloorGenerator()
         self.world_renderer = StaticWorldRenderer(self.assets, settings.TILE_SIZE)
         self.debug_world_view = False
@@ -164,6 +169,7 @@ class Game:
         if dt is None:
             dt = self.clock.tick(settings.FPS) / 1000.0
         dt = min(dt, settings.MAX_DELTA_TIME)
+        self.last_frame_dt = dt
 
         for event in pygame.event.get():
             self.handle_event(event)
@@ -188,6 +194,9 @@ class Game:
     def handle_keydown(self, key: int) -> None:
         if key == pygame.K_F2:
             self.debug_world_view = not self.debug_world_view
+            return
+        if key == pygame.K_F3:
+            self.performance_overlay = not self.performance_overlay
             return
 
         if self.state == GameState.PLAYING and self.debug_world_view:
@@ -214,7 +223,9 @@ class Game:
             return
 
         if self.state == GameState.PLAYING:
-            if key == pygame.K_ESCAPE:
+            if key == pygame.K_SPACE:
+                self.trigger_scan()
+            elif key == pygame.K_ESCAPE:
                 self.transition_to(GameState.PAUSED)
             return
 
@@ -285,6 +296,7 @@ class Game:
                 self.dynamic_blockers.replace_doors([])
                 self.floor_world_surface = None
                 self.floor_preview_surface = None
+                self.scan_system.reset()
             self.transition_to(GameState.FLOOR_TRANSITION)
         elif action == "retry_seed":
             self.retry_same_seed()
@@ -332,6 +344,23 @@ class Game:
 
         self.player.update(direction, dt, self.placeholder_run.generated_floor, self.dynamic_blockers)
         self.camera.update(self.player.world_position, dt)
+        self.scan_system.update(dt)
+
+    def trigger_scan(self) -> bool:
+        if (
+            self.state is not GameState.PLAYING
+            or self.placeholder_run is None
+            or self.placeholder_run.generated_floor is None
+            or self.player is None
+        ):
+            return False
+        return self.scan_system.trigger(
+            self.player.world_position,
+            self.placeholder_run.generated_floor,
+            self.dynamic_blockers,
+            settings.TILE_SIZE,
+            session_time=self.placeholder_run.elapsed_time,
+        )
 
     def transition_to(self, new_state: GameState) -> None:
         self.previous_state = self.state
@@ -378,12 +407,14 @@ class Game:
         self.floor_preview_surface = None
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
         self.generation_error = None
+        self.scan_system.reset()
         self.world_renderer.clear()
 
     def request_quit(self) -> None:
         self.running = False
 
     def prepare_generated_floor(self) -> None:
+        self.scan_system.reset()
         if self.placeholder_run is None:
             return
         try:
@@ -419,6 +450,7 @@ class Game:
         )
         self.doors = door_result.doors
         self.dynamic_blockers = door_result.blockers
+        self.scan_system.reset()
 
     def nearest_door(self, door_type: DoorType | None = None) -> DynamicDoor | None:
         if self.player is None:
@@ -555,8 +587,10 @@ class Game:
                 self.local_glow_surface,
                 player_screen_rect.center,
             )
+            self.scan_renderer.render(self.screen, self.scan_system, self.camera)
             self.screen.blit(self.player.image, player_screen_rect)
         else:
+            self.scan_renderer.render(self.screen, self.scan_system, self.camera)
             self.screen.blit(self.player.image, player_screen_rect)
             draw_camera_debug_overlay(
                 self.screen,
@@ -567,6 +601,7 @@ class Game:
                 self.player,
             )
             draw_door_debug_overlay(self.screen, self.doors, self.camera, self.fonts["small"])
+            self.scan_renderer.render_debug(self.screen, self.scan_system, self.camera, font=self.fonts["small"])
             report = generated_floor.validation_report
             if report is not None:
                 debug_lines = [
@@ -578,6 +613,8 @@ class Game:
                 self.draw_text_lines(debug_lines, 16, 112, 24)
 
         self.draw_gameplay_hud()
+        if self.performance_overlay:
+            self.draw_performance_overlay()
 
     def render_paused(self) -> None:
         self.render_playing()
@@ -675,8 +712,9 @@ class Game:
             f"World ({self.player.world_position.x:0.1f}, {self.player.world_position.y:0.1f})",
             f"Tile {self.player.current_tile}",
             f"Doors {len(self.doors)} | Power {'ON' if self.floor_power_available else 'OFF'}",
-            f"F2 Debug {'ON' if self.debug_world_view else 'OFF'}",
-            "Esc Pause",
+            "SCAN READY" if self.scan_system.ready else f"SCAN {self.scan_system.cooldown_remaining:0.1f}s",
+            f"F2 Debug {'ON' if self.debug_world_view else 'OFF'} | F3 Perf {'ON' if self.performance_overlay else 'OFF'}",
+            "Space Scan | Esc Pause",
         ]
         font = self.fonts["small"]
         width = 288
@@ -689,6 +727,29 @@ class Game:
         for index, line in enumerate(hud_lines):
             color = settings.COLOR_TEXT if index < 4 else settings.COLOR_TEXT_MUTED
             self.screen.blit(font.render(line, True, color), (24, 24 + index * 24))
+
+    def draw_performance_overlay(self) -> None:
+        wave = self.scan_system.active_wave
+        diagnostics = self.scan_system.diagnostics
+        fps = self.clock.get_fps()
+        lines = [
+            f"FPS {fps:0.1f} | frame {self.last_frame_dt * 1000.0:0.2f} ms",
+            f"scan {'active' if wave is not None else 'idle'} | radius {wave.current_radius:0.1f}" if wave else "scan idle",
+            f"rays {settings.SCAN_RAY_COUNT} | raw {diagnostics.raw_hit_count} | hits {diagnostics.deduplicated_hit_count}",
+            f"traces {len(self.scan_system.traces)} | segments {diagnostics.segments_drawn}",
+            f"raycast {diagnostics.last_raycast_ms:0.2f} ms | max {diagnostics.max_raycast_ms:0.2f} ms",
+            f"dynamic doors {diagnostics.last_dynamic_door_count}",
+        ]
+        font = self.fonts["small"]
+        width = 390
+        height = 18 + len(lines) * 23
+        panel = pygame.Rect(settings.WINDOW_WIDTH - width - 12, 12, width, height)
+        self.overlay_surface.fill((0, 0, 0, 0))
+        pygame.draw.rect(self.overlay_surface, (6, 10, 14, 205), panel, border_radius=6)
+        pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, panel, width=1, border_radius=6)
+        self.screen.blit(self.overlay_surface, (0, 0))
+        for index, line in enumerate(lines):
+            self.screen.blit(font.render(line, True, settings.COLOR_TEXT_MUTED), (panel.left + 12, panel.top + 10 + index * 23))
 
     def draw_button_group(self, state: GameState) -> None:
         group = self.buttons.get(state, [])

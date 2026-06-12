@@ -253,3 +253,64 @@ Last updated: 2026-06-12
 - Pause during animation.
 - Resume and verify animation continues correctly.
 - Restart and verify new door instances exist.
+
+## Phase 7 Notes
+
+- Added a fixed-origin normal scan triggered with Space.
+- Added configurable 720-ray tile-grid DDA raycasting that is calculated once per scan rather than once per frame.
+- Rays stop at the first wall, damaged wall, obstacle, pillar, map boundary or scan-blocking dynamic door.
+- Added exact dynamic-door rectangle intersection through the existing blocker registry. Closed, locked and wedged-closed doors block; open and wedged-open doors allow rays through.
+- Added conservative diagonal-corner handling so a zero-width gap between touching blockers does not reveal geometry behind the corner.
+- Added reusable point-to-point line of sight with the same static and dynamic blocker rules for future creature snapshots and AI.
+- Added expanding scan-front timing, fixed world-space origins, distance-based trace reveal, smooth trace fading, trace cleanup and bounded threat-event hooks.
+- Added trace deduplication and conservative contour connection rules that reject gaps, depth jumps, doorway bridges and corner bridges.
+- Added a cached viewport scan renderer, nearly black normal gameplay, corrected small player-local glow, F2 sampled ray debugging and F3 performance diagnostics.
+- Door state is snapshotted at scan activation: a door closed at activation blocks that historical scan even if it opens later.
+- Current limitations reserved for later phases: no moving creatures, dynamic creature snapshots, AI reactions, objective items, floor progression, materials, crafting or modules.
+
+## Phase 7 Created Or Updated Files
+
+- `game/systems/__init__.py`
+- `game/systems/raycasting.py`
+- `game/systems/scan.py`
+- `game/settings.py`
+- `game/app.py`
+- `game/world/rendering.py`
+- `tests/test_raycasting.py`
+- `tests/test_scan.py`
+- `tests/test_scan_app.py`
+- `tools/smoke_test.py`
+- `tools/scan_preview.py`
+- `tools/scan_benchmark.py`
+- `README.md`
+- `IMPLEMENTATION_PLAN.md`
+- `PROGRESS.md`
+
+## Phase 7 Test Results
+
+- `python tools/generate_placeholder_assets.py`: passed.
+- `python -m unittest discover -s tests`: passed, 196 tests.
+- `python tools/smoke_test.py`: passed, including fixed origin, reveal, pause freeze, F3 and restart cleanup checks.
+- `python tools/generation_test.py`: passed for 450 floors, 0 failures, maximum attempt index 4, average attempt index 1.313 and connectivity ratio 1.000.
+- `python tools/player_preview.py --seed 12345 --headless`: passed.
+- `python tools/door_preview.py --seed 12345 --floor 2 --headless`: passed.
+- `python tools/scan_preview.py --seed 12345 --floor 2 --headless`: passed; 707 raw hits, 506 deduplicated hits and approximately 13.2 ms raycast time in that run.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average 14.419 ms, median 14.143 ms and maximum 17.618 ms in the container environment.
+- `python -m py_compile main.py`: passed.
+- `python -c "import main; print('main import ok')"`: passed.
+- Scan previews confirmed at `artifacts/scan_preview_12345_floor2_early.png`, `artifacts/scan_preview_12345_floor2_late.png` and `artifacts/scan_preview_12345_floor2_camera_shift.png`.
+
+## Phase 7 Manual Checklist
+
+- Run `python main.py` and start New Run.
+- Verify the distant map is almost entirely black.
+- Press Space and verify the circular front expands from the original world position.
+- Move while the wave expands and verify its origin remains behind.
+- Confirm nearby wall contours appear only when reached by the wave.
+- Confirm the first wall hides everything behind it and corners do not leak visibility.
+- Scan a closed powered door, then open it and confirm the old scan remains blocked.
+- Trigger a new scan through the open door and confirm it reaches the space behind it.
+- Move the camera while traces fade and confirm traces remain fixed in world space.
+- Toggle F2 and inspect sampled rays, hit categories and blocker IDs.
+- Toggle F3 and inspect raycast timing and trace counts.
+- Pause during an active wave and confirm radius, traces and cooldown freeze until resume.
