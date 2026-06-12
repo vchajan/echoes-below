@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pygame
 
+from game.assets import EFFECT_IMAGE_PATHS, MODULE_ICON_PATHS, AssetManager
 from game import settings
 from game.states import GameState, PlaceholderRun
 from game.ui.buttons import Button
@@ -17,6 +18,8 @@ class Game:
         self.clock = pygame.time.Clock()
 
         self.fonts = self._load_fonts()
+        self.assets = AssetManager(audio_available=self.audio_available)
+        self.visual_assets = self._load_visual_assets()
         self.overlay_surface = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
 
         self.running = True
@@ -79,6 +82,47 @@ class Game:
                 Button.centered("Main Menu", "main_menu", (center_x, 530)),
             ],
         }
+
+    def _load_visual_assets(self) -> dict[str, object]:
+        visuals: dict[str, object] = {
+            "tiles": self.assets.get_sheet_frames("industrial_tiles"),
+            "player_idle": self.assets.get_frames("player", "idle_down")[0],
+            "player_outline": self.assets.get_outline_frames("player", "idle_down")[0],
+            "creature": self.assets.get_frames("creature", "move")[0],
+            "creature_outline": self.assets.get_outline_frames("creature", "move")[0],
+            "echo_core": self.assets.get_frames("echo_core", "pulse")[1],
+            "elevator": self.assets.get_frames("elevator", "unlocked")[0],
+            "module_icons": {
+                name: self.assets.load_image(path, (48, 48)) for name, path in MODULE_ICON_PATHS.items()
+            },
+            "effect_icons": {
+                name: self.assets.load_image(path, (64, 64)) for name, path in EFFECT_IMAGE_PATHS.items()
+            },
+        }
+
+        outline_sheet_names = [
+            "player",
+            "creature",
+            "materials",
+            "powered_door",
+            "security_door",
+            "containment_door",
+            "generator_component",
+            "generator",
+            "keycard",
+            "relay",
+            "containment_component",
+            "containment_control",
+            "echo_core",
+            "elevator",
+        ]
+        for sheet_name in outline_sheet_names:
+            self.assets.get_outline_frames(sheet_name)
+
+        for icon_path in MODULE_ICON_PATHS.values():
+            self.assets.get_outline_image(icon_path, (48, 48))
+        self.assets.get_flipped_frames("creature", "move")
+        return visuals
 
     def run(self) -> None:
         try:
@@ -267,12 +311,25 @@ class Game:
 
     def render_splash(self) -> None:
         self.draw_background()
+        core = self.visual_assets["echo_core"]
+        assert isinstance(core, pygame.Surface)
+        core_rect = core.get_rect(center=(settings.WINDOW_WIDTH // 2, 215))
+        self.screen.blit(core, core_rect)
         self.draw_centered_text("Echoes Below", "title", settings.COLOR_TEXT, 300)
         self.draw_centered_text("A descent into the unseen", "subtitle", settings.COLOR_ACCENT, 378)
         self.draw_centered_text("Press Enter, Space or Escape to skip", "small", settings.COLOR_TEXT_MUTED, 620)
 
     def render_main_menu(self) -> None:
         self.draw_background()
+        module_icons = self.visual_assets["module_icons"]
+        assert isinstance(module_icons, dict)
+        core = self.visual_assets["echo_core"]
+        assert isinstance(core, pygame.Surface)
+        self.screen.blit(core, core.get_rect(center=(settings.WINDOW_WIDTH // 2, 112)))
+        for index, icon_name in enumerate(("shock_pulse_ready", "decoy_beacon_ready", "door_wedge_ready", "scan_projector_ready")):
+            icon = module_icons[icon_name]
+            assert isinstance(icon, pygame.Surface)
+            self.screen.blit(icon, (460 + index * 72, 545))
         self.draw_centered_text("Echoes Below", "title", settings.COLOR_TEXT, 170)
         self.draw_centered_text("A descent into the unseen", "body", settings.COLOR_ACCENT, 230)
         self.draw_button_group(GameState.MAIN_MENU)
@@ -301,14 +358,22 @@ class Game:
             "",
             "Escape or Backspace returns to the main menu.",
         ]
+        module_icons = self.visual_assets["module_icons"]
+        assert isinstance(module_icons, dict)
+        icon_names = ["floor", "scan_ready", "score", "shock_pulse_ready", "decoy_beacon_ready", "door_wedge_ready", "scan_projector_ready"]
+        for index, icon_name in enumerate(icon_names):
+            icon = module_icons[icon_name]
+            assert isinstance(icon, pygame.Surface)
+            self.screen.blit(icon, (880, 130 + index * 58))
         self.draw_text_lines(lines, 160, 118, line_height=29)
         self.draw_button_group(GameState.HOW_TO_PLAY)
 
     def render_playing(self) -> None:
         self.draw_background()
-        self.draw_centered_text("Gameplay systems under construction", "subtitle", settings.COLOR_TEXT, 270)
-        self.draw_centered_text("Current state: PLAYING", "body", settings.COLOR_ACCENT, 330)
-        self.draw_centered_text("Press Escape to pause", "body", settings.COLOR_TEXT_MUTED, 380)
+        self.draw_placeholder_asset_scene()
+        self.draw_centered_text("Gameplay systems under construction", "subtitle", settings.COLOR_TEXT, 235)
+        self.draw_centered_text("Current state: PLAYING", "body", settings.COLOR_ACCENT, 295)
+        self.draw_centered_text("Press Escape to pause", "body", settings.COLOR_TEXT_MUTED, 345)
 
         if self.placeholder_run is not None:
             run_line = (
@@ -319,7 +384,7 @@ class Game:
             )
         else:
             run_line = "No active placeholder run"
-        self.draw_centered_text(run_line, "small", settings.COLOR_TEXT_MUTED, 430)
+        self.draw_centered_text(run_line, "small", settings.COLOR_TEXT_MUTED, 395)
 
     def render_paused(self) -> None:
         self.render_playing()
@@ -329,6 +394,12 @@ class Game:
 
     def render_workshop(self) -> None:
         self.draw_background()
+        module_icons = self.visual_assets["module_icons"]
+        assert isinstance(module_icons, dict)
+        for index, icon_name in enumerate(("scrap", "circuit", "power_cell")):
+            icon = module_icons[icon_name]
+            assert isinstance(icon, pygame.Surface)
+            self.screen.blit(icon, (settings.WINDOW_WIDTH // 2 - 92 + index * 68, 330))
         self.draw_centered_text("Elevator Workshop", "subtitle", settings.COLOR_TEXT, 210)
         self.draw_centered_text("Crafting will be added in a later phase.", "body", settings.COLOR_TEXT_MUTED, 280)
         self.draw_button_group(GameState.WORKSHOP)
@@ -361,6 +432,17 @@ class Game:
 
     def draw_background(self) -> None:
         self.screen.fill(settings.COLOR_BACKGROUND)
+        tiles = self.visual_assets.get("tiles") if hasattr(self, "visual_assets") else None
+        if isinstance(tiles, list) and tiles:
+            for x in range(34, settings.WINDOW_WIDTH - 34, 48):
+                for y in range(34, settings.WINDOW_HEIGHT - 34, 48):
+                    tile_index = 0 if (x // 48 + y // 48) % 5 else 1
+                    tile = tiles[tile_index]
+                    if isinstance(tile, pygame.Surface):
+                        self.screen.blit(tile, (x, y))
+            darkness = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
+            darkness.fill((0, 0, 0, 176))
+            self.screen.blit(darkness, (0, 0))
         for x in range(0, settings.WINDOW_WIDTH, 80):
             pygame.draw.line(self.screen, settings.COLOR_BACKGROUND_ALT, (x, 0), (x, settings.WINDOW_HEIGHT))
         for y in range(0, settings.WINDOW_HEIGHT, 80):
@@ -396,3 +478,30 @@ class Game:
         selected_index = self.selected_indices.get(state, 0)
         for index, button in enumerate(group):
             button.draw(self.screen, self.fonts["button"], selected=index == selected_index)
+
+    def draw_placeholder_asset_scene(self) -> None:
+        tiles = self.visual_assets["tiles"]
+        assert isinstance(tiles, list)
+        origin_x = settings.WINDOW_WIDTH // 2 - 168
+        origin_y = 450
+        pattern = [0, 1, 10, 0, 2, 7, 0, 8, 9, 1, 0, 5, 6, 0]
+        for index, tile_index in enumerate(pattern):
+            x = origin_x + (index % 7) * 48
+            y = origin_y + (index // 7) * 48
+            tile = tiles[tile_index]
+            assert isinstance(tile, pygame.Surface)
+            self.screen.blit(tile, (x, y))
+
+        player = self.visual_assets["player_idle"]
+        player_outline = self.visual_assets["player_outline"]
+        creature_outline = self.visual_assets["creature_outline"]
+        elevator = self.visual_assets["elevator"]
+        assert isinstance(player, pygame.Surface)
+        assert isinstance(player_outline, pygame.Surface)
+        assert isinstance(creature_outline, pygame.Surface)
+        assert isinstance(elevator, pygame.Surface)
+
+        self.screen.blit(elevator, elevator.get_rect(center=(origin_x + 312, origin_y + 48)))
+        self.screen.blit(player_outline, player_outline.get_rect(center=(origin_x + 120, origin_y + 56)))
+        self.screen.blit(player, player.get_rect(center=(origin_x + 120, origin_y + 56)))
+        self.screen.blit(creature_outline, creature_outline.get_rect(center=(origin_x + 245, origin_y + 58)))
