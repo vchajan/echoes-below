@@ -12,7 +12,7 @@ from game.entities.scan_objects import ElevatorEntity, MaterialPickup
 from game.entities.player import Player, movement_direction_from_bools
 from game import settings
 from game.systems.creature_ai import CreatureAI, CreatureState
-from game.systems.floor_objectives import Floor1ObjectiveSystem
+from game.systems.floor_objectives import Floor1ObjectiveSystem, Floor2ObjectiveSystem
 from game.systems.scan import ScanRenderer, ScanSystem
 from game.systems.snapshots import EchoSnapshotRenderer, EchoSnapshotSystem
 from game.systems.threat_events import ThreatEventSystem
@@ -65,7 +65,7 @@ class Game:
         self.camera: Camera | None = None
         self.doors: list[DynamicDoor] = []
         self.floor_content: FloorContent | None = None
-        self.floor_objectives: Floor1ObjectiveSystem | None = None
+        self.floor_objectives: Floor1ObjectiveSystem | Floor2ObjectiveSystem | None = None
         self.material_pickups: list[MaterialPickup] = []
         self.elevator_entity: ElevatorEntity | None = None
         self.creatures: list[Creature] = []
@@ -312,6 +312,16 @@ class Game:
             self.transition_to(GameState.MAIN_MENU)
         elif action == "continue_floor":
             if self.state is GameState.WORKSHOP:
+                if self.placeholder_run is not None and self.last_completed_floor == 1:
+                    self.placeholder_run.floor = 2
+                    self.placeholder_run.generated_floor = None
+                    self.floor_world_surface = None
+                    self.floor_preview_surface = None
+                    self.transition_to(GameState.FLOOR_TRANSITION)
+                    return
+                if self.last_completed_floor == 2:
+                    self.workshop_notice = "Floor 3 will be enabled in a later phase"
+                    return
                 self.workshop_notice = "Crafting will be enabled in a later phase"
                 return
             if self.placeholder_run is not None:
@@ -449,7 +459,10 @@ class Game:
                 for door in self.doors:
                     door.set_powered(True)
             if objective_result.floor_completed:
-                self.complete_floor_one()
+                if self.placeholder_run.floor == 2:
+                    self.complete_floor_two()
+                else:
+                    self.complete_floor_one()
                 return
         self.collect_material_pickups()
 
@@ -652,6 +665,17 @@ class Game:
                 self.dynamic_blockers,
                 reserved_tiles=objective_reserved,
             )
+        elif generated_floor.floor_number == 2:
+            objective_reserved = {pickup.tile for pickup in self.material_pickups}
+            objective_reserved.update(door.tile for door in self.doors)
+            objective_reserved.update(generated_floor.candidate_creature_spawns)
+            self.floor_objectives = Floor2ObjectiveSystem.create_for_floor(
+                generated_floor,
+                self.assets,
+                settings.TILE_SIZE,
+                self.doors,
+                reserved_tiles=objective_reserved,
+            )
         else:
             self.floor_objectives = None
         
@@ -704,7 +728,38 @@ class Game:
             return
         self.last_completed_floor = 1
         self.placeholder_run.completed_floor_count = max(self.placeholder_run.completed_floor_count, 1)
+        self.placeholder_run.floor_completion_summaries[1] = {
+            "floor": 1,
+            "power_restored": True,
+            "score": self.placeholder_run.score,
+            "materials": dict(self.placeholder_run.material_counts),
+            "elapsed_time": self.placeholder_run.elapsed_time,
+        }
         self.workshop_notice = "Crafting will be enabled in a later phase"
+        self._clear_floor_runtime()
+        self.transition_to(GameState.WORKSHOP)
+
+    def complete_floor_two(self) -> None:
+        if self.placeholder_run is None:
+            return
+        summary = {
+            "floor": 2,
+            "keycard_recovered": True,
+            "relay_a_active": True,
+            "relay_b_active": True,
+            "security_override_completed": True,
+            "score": self.placeholder_run.score,
+            "materials": dict(self.placeholder_run.material_counts),
+            "elapsed_time": self.placeholder_run.elapsed_time,
+        }
+        self.last_completed_floor = 2
+        self.placeholder_run.completed_floor_count = max(self.placeholder_run.completed_floor_count, 2)
+        self.placeholder_run.floor_completion_summaries[2] = summary
+        self.workshop_notice = "Crafting will be enabled in a later phase"
+        self._clear_floor_runtime()
+        self.transition_to(GameState.WORKSHOP)
+
+    def _clear_floor_runtime(self) -> None:
         self.player = None
         self.camera = None
         self.doors = []
@@ -724,7 +779,6 @@ class Game:
         self.threat_events.reset()
         self.snapshot_system.reset()
         self.world_renderer.clear()
-        self.transition_to(GameState.WORKSHOP)
 
     def nearest_door(self, door_type: DoorType | None = None) -> DynamicDoor | None:
         if self.player is None:
@@ -996,27 +1050,54 @@ class Game:
                 if self.floor_objectives is not None:
                     state = self.floor_objectives.state
                     placement = self.floor_objectives.placement
-                    debug_lines.extend(
-                        [
-                            (
-                                f"Floor1 objective: {state.current_objective_text} | "
-                                f"components {state.components_collected}/2"
-                            ),
-                            (
-                                f"Rooms A:{placement.component_a_room_id} B:{placement.component_b_room_id} "
-                                f"G:{placement.generator_room_id} | target {state.interaction_target_id}"
-                            ),
-                            (
-                                f"Generator {self.floor_objectives.generator.state.name} "
-                                f"repair {state.generator_repair_progress:0.2f}/{settings.GENERATOR_REPAIR_DURATION:0.2f} "
-                                f"threat {state.generator_threat_event_id}"
-                            ),
-                            (
-                                f"Power {state.floor_power_active} | elevator unlocked {state.elevator_unlocked} "
-                                f"complete {state.floor_complete}"
-                            ),
-                        ]
-                    )
+                    if state.floor_number == 1:
+                        debug_lines.extend(
+                            [
+                                (
+                                    f"Floor1 objective: {state.current_objective_text} | "
+                                    f"components {state.components_collected}/2"
+                                ),
+                                (
+                                    f"Rooms A:{placement.component_a_room_id} B:{placement.component_b_room_id} "
+                                    f"G:{placement.generator_room_id} | target {state.interaction_target_id}"
+                                ),
+                                (
+                                    f"Generator {self.floor_objectives.generator.state.name} "
+                                    f"repair {state.generator_repair_progress:0.2f}/{settings.GENERATOR_REPAIR_DURATION:0.2f} "
+                                    f"threat {state.generator_threat_event_id}"
+                                ),
+                                (
+                                    f"Power {state.floor_power_active} | elevator unlocked {state.elevator_unlocked} "
+                                    f"complete {state.floor_complete}"
+                                ),
+                            ]
+                        )
+                    elif state.floor_number == 2:
+                        debug_lines.extend(
+                            [
+                                (
+                                    f"Floor2 objective: {state.current_objective_text} | "
+                                    f"keycard {state.keycard_collected} relays {state.relays_active_count}/2"
+                                ),
+                                (
+                                    f"Gate {placement.security_gate_edge} | public {list(placement.public_side_room_ids)} "
+                                    f"secure {list(placement.secure_side_room_ids)}"
+                                ),
+                                (
+                                    f"Security {placement.security_door_id} {self.floor_objectives.security_door.state.name} "
+                                    f"tile {placement.security_door_tile}"
+                                ),
+                                (
+                                    f"Keycard r{placement.keycard_room_id} {placement.keycard_tile} | "
+                                    f"Relay A r{placement.relay_a_room_id} {placement.relay_a_tile} | "
+                                    f"Relay B r{placement.relay_b_room_id} {placement.relay_b_tile}"
+                                ),
+                                (
+                                    f"Relay progress A {state.relay_a_progress:0.2f} B {state.relay_b_progress:0.2f} | "
+                                    f"threats {state.relay_a_threat_event_id},{state.relay_b_threat_event_id}"
+                                ),
+                            ]
+                        )
                 self.draw_text_lines(debug_lines, 16, 112, 24)
 
         self.draw_gameplay_hud()
@@ -1040,10 +1121,20 @@ class Game:
         run = self.placeholder_run
         score = run.score if run is not None else 0
         materials = run.material_counts if run is not None else {"scrap": 0, "circuit": 0, "power_cell": 0}
-        title = "Floor 1 Complete" if self.last_completed_floor == 1 else "Elevator Workshop"
+        if self.last_completed_floor == 2:
+            title = "Floor 2 Complete"
+            status = "Security override complete"
+        elif self.last_completed_floor == 1:
+            title = "Floor 1 Complete"
+            status = "Power restored"
+        else:
+            title = "Elevator Workshop"
+            status = "Systems standing by"
         self.draw_centered_text(title, "subtitle", settings.COLOR_TEXT, 185)
-        self.draw_centered_text("Power restored", "body", settings.COLOR_ACCENT, 245)
+        self.draw_centered_text(status, "body", settings.COLOR_ACCENT, 245)
         self.draw_centered_text(f"Score {score}", "body", settings.COLOR_TEXT_MUTED, 285)
+        completed = run.completed_floor_count if run is not None else 0
+        self.draw_centered_text(f"Completed floors {completed}", "small", settings.COLOR_TEXT_MUTED, 312)
         self.draw_centered_text(
             f"Materials S:{materials.get('scrap', 0)} C:{materials.get('circuit', 0)} P:{materials.get('power_cell', 0)}",
             "small",
@@ -1056,7 +1147,7 @@ class Game:
     def render_floor_transition(self) -> None:
         self.draw_background()
         floor = self.placeholder_run.floor if self.placeholder_run is not None else 1
-        self.draw_centered_text("Descending...", "subtitle", settings.COLOR_TEXT, 280)
+        self.draw_centered_text(f"Descending to Floor {floor}", "subtitle", settings.COLOR_TEXT, 280)
         self.draw_centered_text(f"Next floor: {floor}", "body", settings.COLOR_ACCENT, 345)
         self.draw_centered_text("Press Enter or Space to skip", "small", settings.COLOR_TEXT_MUTED, 620)
 
@@ -1142,8 +1233,9 @@ class Game:
         prompt_line = ""
         if self.floor_objectives is not None:
             state = self.floor_objectives.state
+            heading = "SECURITY OVERRIDE" if state.floor_number == 2 else "RESTORE POWER"
             objective_lines = [
-                "RESTORE POWER",
+                heading,
                 state.current_objective_text,
             ]
             if state.current_prompt:
@@ -1175,7 +1267,7 @@ class Game:
         pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, panel, width=1, border_radius=6)
         self.screen.blit(self.overlay_surface, (0, 0))
         for index, line in enumerate(hud_lines):
-            color = settings.COLOR_ACCENT if line == "RESTORE POWER" else (
+            color = settings.COLOR_ACCENT if line in ("RESTORE POWER", "SECURITY OVERRIDE") else (
                 settings.COLOR_TEXT if index < 4 else settings.COLOR_TEXT_MUTED
             )
             self.screen.blit(font.render(line, True, color), (24, 24 + index * 24))
@@ -1186,9 +1278,21 @@ class Game:
         if self.floor_objectives is None:
             return
         state = self.floor_objectives.state
-        if state.interaction_progress <= 0.0 or state.generator_repaired:
+        if state.interaction_progress <= 0.0:
             return
-        fraction = max(0.0, min(1.0, state.interaction_progress / settings.GENERATOR_REPAIR_DURATION))
+        if state.floor_number == 1:
+            if state.generator_repaired:
+                return
+            duration = settings.GENERATOR_REPAIR_DURATION
+            label_text = f"Repairing generator {min(100.0, state.interaction_progress / duration * 100):0.0f}%"
+        else:
+            duration = settings.RELAY_ACTIVATION_DURATION
+            relay_label = "relay"
+            relay = getattr(self.floor_objectives, "_relay_by_id", lambda _: None)(state.active_relay_id)
+            if relay is not None:
+                relay_label = f"Relay {relay.label}"
+            label_text = f"Activating {relay_label} {min(100.0, state.interaction_progress / duration * 100):0.0f}%"
+        fraction = max(0.0, min(1.0, state.interaction_progress / duration))
         panel = pygame.Rect(settings.WINDOW_WIDTH // 2 - 180, settings.WINDOW_HEIGHT - 88, 360, 42)
         fill_rect = pygame.Rect(panel.left + 10, panel.bottom - 18, int((panel.width - 20) * fraction), 8)
         self.overlay_surface.fill((0, 0, 0, 0))
@@ -1196,7 +1300,7 @@ class Game:
         pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, panel, width=1, border_radius=6)
         pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT, fill_rect, border_radius=3)
         self.screen.blit(self.overlay_surface, (0, 0))
-        label = self.fonts["small"].render(f"Repairing generator {fraction * 100:0.0f}%", True, settings.COLOR_TEXT)
+        label = self.fonts["small"].render(label_text, True, settings.COLOR_TEXT)
         self.screen.blit(label, (panel.left + 10, panel.top + 7))
 
     def draw_context_messages(self) -> None:
@@ -1216,13 +1320,24 @@ class Game:
             return
         screen_rect = self.screen.get_rect()
         for entity in self.floor_objectives.active_entities:
-            distance = entity.world_position.distance_to(self.player.world_position)
+            world_position = getattr(entity, "world_position", getattr(entity, "world_center", None))
+            if world_position is None:
+                continue
+            distance = world_position.distance_to(self.player.world_position)
             if distance > settings.OBJECTIVE_CONTACT_HINT_RADIUS:
                 continue
-            position = tuple(round(value) for value in self.camera.world_to_screen(entity.world_position))
+            position = tuple(round(value) for value in self.camera.world_to_screen(world_position))
             if not screen_rect.collidepoint(position):
                 continue
-            color = settings.COLOR_ACCENT if entity is self.floor_objectives.generator else (255, 220, 80)
+            category = getattr(entity, "scan_category", "")
+            if category.startswith("relay"):
+                color = settings.COLOR_SUCCESS
+            elif category.startswith("door"):
+                color = settings.COLOR_WARNING
+            elif entity is getattr(self.floor_objectives, "generator", None):
+                color = settings.COLOR_ACCENT
+            else:
+                color = (255, 220, 80)
             pygame.draw.circle(self.screen, color, position, 3)
 
     def draw_floor1_objective_debug(self) -> None:
@@ -1235,12 +1350,19 @@ class Game:
             if not screen_rect.colliderect(rect):
                 continue
             self.screen.blit(entity.image, rect)
-            color = (255, 220, 80) if entity is not self.floor_objectives.generator else settings.COLOR_SUCCESS
+            if entity is getattr(self.floor_objectives, "generator", None):
+                color = settings.COLOR_SUCCESS
+            elif getattr(entity, "scan_category", "").startswith("relay"):
+                color = settings.COLOR_ACCENT
+            elif getattr(entity, "scan_category", "").startswith("door"):
+                color = settings.COLOR_WARNING
+            else:
+                color = (255, 220, 80)
             pygame.draw.rect(self.screen, color, rect, 1)
             collision_rect = getattr(entity, "collision_rect", None)
             if collision_rect is not None:
                 pygame.draw.rect(self.screen, color, self.camera.world_rect_to_screen(collision_rect), 1)
-            if entity is self.floor_objectives.generator:
+            if entity is getattr(self.floor_objectives, "generator", None):
                 pygame.draw.rect(
                     self.screen,
                     settings.COLOR_ACCENT,
@@ -1252,7 +1374,13 @@ class Game:
                     f"repair={entity.repair_progress:0.2f}"
                 )
             else:
-                label_text = f"{entity.unique_id} room={entity.room_id} tile={entity.tile}"
+                room_id = getattr(entity, "room_id", "-")
+                tile = getattr(entity, "tile", "-")
+                state_name = getattr(getattr(entity, "state", None), "name", "")
+                label_text = f"{entity.unique_id} room={room_id} tile={tile} {state_name}"
+                interaction_rect = getattr(entity, "interaction_rect", None)
+                if interaction_rect is not None:
+                    pygame.draw.rect(self.screen, color, self.camera.world_rect_to_screen(interaction_rect), 1)
             label = font.render(label_text, True, color)
             self.screen.blit(label, (rect.left, max(0, rect.top - 18)))
 
@@ -1293,22 +1421,41 @@ class Game:
         ]
         if self.floor_objectives is not None:
             state = self.floor_objectives.state
-            lines.extend(
-                [
-                    (
-                        f"F1 objective {state.current_objective_text} | "
-                        f"components {state.components_collected}/2"
-                    ),
-                    (
-                        f"repair {state.generator_repair_progress:0.2f}/{settings.GENERATOR_REPAIR_DURATION:0.2f} "
-                        f"powered {state.floor_power_active} elevator {state.elevator_unlocked}"
-                    ),
-                    (
-                        f"objective entities {len(self.floor_objectives.active_entities)} | "
-                        f"generator events {state.generator_activation_event_count}"
-                    ),
-                ]
-            )
+            if state.floor_number == 1:
+                lines.extend(
+                    [
+                        (
+                            f"F1 objective {state.current_objective_text} | "
+                            f"components {state.components_collected}/2"
+                        ),
+                        (
+                            f"repair {state.generator_repair_progress:0.2f}/{settings.GENERATOR_REPAIR_DURATION:0.2f} "
+                            f"powered {state.floor_power_active} elevator {state.elevator_unlocked}"
+                        ),
+                        (
+                            f"objective entities {len(self.floor_objectives.active_entities)} | "
+                            f"generator events {state.generator_activation_event_count}"
+                        ),
+                    ]
+                )
+            elif state.floor_number == 2:
+                lines.extend(
+                    [
+                        (
+                            f"F2 objective {state.current_objective_text} | "
+                            f"keycard {state.keycard_collected} relays {state.relays_active_count}/2"
+                        ),
+                        (
+                            f"relay progress A {state.relay_a_progress:0.2f}/{settings.RELAY_ACTIVATION_DURATION:0.2f} "
+                            f"B {state.relay_b_progress:0.2f}/{settings.RELAY_ACTIVATION_DURATION:0.2f}"
+                        ),
+                        (
+                            f"powered {state.floor_power_active} elevator {state.elevator_unlocked} | "
+                            f"objective entities {len(self.floor_objectives.active_entities)} | "
+                            f"relay events {state.relay_activation_event_count}"
+                        ),
+                    ]
+                )
         font = self.fonts["small"]
         width = 390
         height = 18 + len(lines) * 23

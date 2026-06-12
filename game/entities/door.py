@@ -61,6 +61,10 @@ class DynamicDoor(pygame.sprite.Sprite):
         self.wedge_remaining: float | None = None
 
         self.world_center = pygame.Vector2((self.tile[0] + 0.5) * tile_size, (self.tile[1] + 0.5) * tile_size)
+        self.world_position = self.world_center
+        self.scan_position = self.world_center
+        self.scan_category = f"door:{door_type.value}"
+        self.scan_active = True
         self.collision_rect = self._make_collision_rect()
         self.approach_rect = self._make_approach_rect()
         self.interaction_rect = self.approach_rect.copy()
@@ -114,6 +118,9 @@ class DynamicDoor(pygame.sprite.Sprite):
     @property
     def animation_frame_index(self) -> int:
         return self._animations[self._animation_key_for_state()].frame_index
+
+    def capture_scan_outline(self) -> pygame.Surface:
+        return self.image
 
     def blocking_profile(self) -> DoorBlockingProfile:
         blocked = self.state not in (DoorState.OPEN, DoorState.WEDGED_OPEN)

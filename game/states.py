@@ -28,6 +28,7 @@ class PlaceholderRun:
     generated_floor: Any | None = None
     material_counts: dict[str, int] = field(default_factory=lambda: {"scrap": 0, "circuit": 0, "power_cell": 0})
     materials_collected: int = 0
+    floor_completion_summaries: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     def reset_same_seed(self) -> "PlaceholderRun":
         return PlaceholderRun(
@@ -39,4 +40,5 @@ class PlaceholderRun:
             completed_floor_count=0,
             material_counts={"scrap": 0, "circuit": 0, "power_cell": 0},
             materials_collected=0,
+            floor_completion_summaries={},
         )
