@@ -84,8 +84,10 @@ Doors are rendered separately from the cached static floor surface. The static t
 12. Phase 11: Floor 1 restore-power objective, generator repair, power activation, elevator completion and controlled workshop transition.
 13. Phase 12: Floor 2 security objective with keycard, security gate, two relays, relay threats and elevator completion.
 14. Phase 13: Floor 3 extraction and victory.
-15. Phases 14-16: workshop, recipes and four active modules.
-16. Phases 17-20: HUD/effects, performance, QA and submission documentation.
+15. Phase 14: workshop crafting, material recipes, persistent ownership and two equipped module slots.
+16. Phase 15: Shock Pulse and Decoy Beacon active effects.
+17. Phase 16: Door Wedge and Scan Projector active effects.
+18. Phases 17-20: HUD/effects, performance, QA and submission documentation.
 
 ## Automated Tests
 
@@ -168,12 +170,12 @@ Static geometry is raycast once when Space is pressed, never every frame. The ac
 - The one-life rule remains unchanged: death on Floor 2 ends the whole run, and Retry Same Seed restarts deterministically at Floor 1.
 
 
-## Phase 13 Floor 3 And Victory Architecture Notes
+## Phase 14 Workshop And Loadout Architecture Notes
 
-- `game/entities/objectives.py` now includes `ContainmentComponentPickup`, `ContainmentControlEntity`, `ContainmentControlState` and `EchoCorePickup`. All expose stable world-space scan data and cached historical outline frames.
-- `game/systems/floor3_objectives.py` owns Floor 3 state, deterministic containment-gate placement, component collection, held-F control installation, containment-door unlock, Echo Core extraction, objective messages and elevator completion.
-- Floor 3 uses one authoritative containment door. Floor 3 door generation no longer places a required security door in parallel with the containment objective.
-- Containment-control installation emits one `CONTAINMENT_CONTROL` threat. Echo Core collection emits one stronger `ECHO_CORE` threat, unlocks the elevator and requests the extraction danger escalation from `Game`.
-- `Game._start_extraction_phase()` accelerates existing creatures and adds one deterministic third creature if a validated unused spawn is available. It is idempotent.
-- Floor 3 completion archives the final run summary, clears all active floor runtime systems and transitions directly to `VICTORY`, not WORKSHOP.
-- The one-life rule remains unchanged: death on Floor 3 ends the full run, and Retry Same Seed restarts deterministically at Floor 1.
+- `game/systems/modules.py` contains the four `ModuleType` values, immutable recipe/display definitions and `ModuleLoadout`. The loadout owns crafted module IDs and two unique equipped slots, but no active-effect timers.
+- `game/systems/crafting.py` contains `WorkshopSystem`. It owns only workshop UI selection, target slot and action messages; material counters and module ownership remain run-level data.
+- `PlaceholderRun.module_loadout` persists through `_clear_floor_runtime()` and floor transitions. `reset_same_seed()` creates a fresh loadout, matching the one-life restart rule.
+- Crafting subtracts material counters atomically after affordability checks. Score and progression are never crafting currency.
+- Replacing an equipped module only changes a slot reference; the replaced module remains crafted. The same module cannot occupy both slots.
+- `Game.render_workshop()` renders cached module icons and ordinary text/rectangles. It performs no asset loading or recipe mutation.
+- Phase 15 and Phase 16 will layer runtime cooldown/effect state over the stable crafted/equipped contract rather than changing workshop ownership.

@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any
 
+from game.systems.modules import ModuleLoadout
+
 
 class GameState(Enum):
     SPLASH = auto()
@@ -29,6 +31,7 @@ class PlaceholderRun:
     material_counts: dict[str, int] = field(default_factory=lambda: {"scrap": 0, "circuit": 0, "power_cell": 0})
     materials_collected: int = 0
     floor_completion_summaries: dict[int, dict[str, Any]] = field(default_factory=dict)
+    module_loadout: ModuleLoadout = field(default_factory=ModuleLoadout)
 
     def reset_same_seed(self) -> "PlaceholderRun":
         return PlaceholderRun(
@@ -41,4 +44,5 @@ class PlaceholderRun:
             material_counts={"scrap": 0, "circuit": 0, "power_cell": 0},
             materials_collected=0,
             floor_completion_summaries={},
+            module_loadout=ModuleLoadout(),
         )
