@@ -1,0 +1,398 @@
+from __future__ import annotations
+
+import pygame
+
+from game import settings
+from game.states import GameState, PlaceholderRun
+from game.ui.buttons import Button
+
+
+class Game:
+    def __init__(self) -> None:
+        pygame.init()
+        self.audio_available = self._init_audio()
+
+        self.screen = pygame.display.set_mode(settings.WINDOW_SIZE)
+        pygame.display.set_caption(settings.WINDOW_TITLE)
+        self.clock = pygame.time.Clock()
+
+        self.fonts = self._load_fonts()
+        self.overlay_surface = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
+
+        self.running = True
+        self._shutdown_complete = False
+        self.state = GameState.SPLASH
+        self.previous_state = GameState.SPLASH
+
+        self.splash_elapsed = 0.0
+        self.floor_transition_elapsed = 0.0
+        self.next_seed = 1000
+        self.run_exists = False
+        self.placeholder_run: PlaceholderRun | None = None
+
+        self.buttons = self._build_buttons()
+        self.selected_indices = {state: 0 for state in self.buttons}
+
+    def _init_audio(self) -> bool:
+        try:
+            pygame.mixer.init()
+        except pygame.error:
+            return False
+        return True
+
+    def _load_fonts(self) -> dict[str, pygame.font.Font]:
+        return {
+            "title": pygame.font.SysFont("consolas", settings.FONT_TITLE_SIZE, bold=True),
+            "subtitle": pygame.font.SysFont("consolas", settings.FONT_SUBTITLE_SIZE),
+            "body": pygame.font.SysFont("consolas", settings.FONT_BODY_SIZE),
+            "small": pygame.font.SysFont("consolas", settings.FONT_SMALL_SIZE),
+            "button": pygame.font.SysFont("consolas", settings.FONT_BUTTON_SIZE, bold=True),
+        }
+
+    def _build_buttons(self) -> dict[GameState, list[Button]]:
+        center_x = settings.WINDOW_WIDTH // 2
+        return {
+            GameState.MAIN_MENU: [
+                Button.centered("New Run", "new_run", (center_x, 330)),
+                Button.centered("How to Play", "how_to_play", (center_x, 400)),
+                Button.centered("Quit", "quit", (center_x, 470)),
+            ],
+            GameState.HOW_TO_PLAY: [
+                Button.centered("Back", "main_menu", (center_x, 645), (220, settings.BUTTON_HEIGHT)),
+            ],
+            GameState.PAUSED: [
+                Button.centered("Resume", "resume", (center_x, 330)),
+                Button.centered("Restart Run", "restart_run", (center_x, 400)),
+                Button.centered("Main Menu", "main_menu", (center_x, 470)),
+            ],
+            GameState.WORKSHOP: [
+                Button.centered("Continue", "continue_floor", (center_x, 430)),
+                Button.centered("Main Menu", "main_menu", (center_x, 500)),
+            ],
+            GameState.DEATH: [
+                Button.centered("New Run", "new_run", (center_x, 420)),
+                Button.centered("Retry Same Seed", "retry_seed", (center_x, 490)),
+                Button.centered("Main Menu", "main_menu", (center_x, 560)),
+            ],
+            GameState.VICTORY: [
+                Button.centered("New Run", "new_run", (center_x, 460)),
+                Button.centered("Main Menu", "main_menu", (center_x, 530)),
+            ],
+        }
+
+    def run(self) -> None:
+        try:
+            while self.running:
+                self.run_one_frame()
+        finally:
+            self.shutdown()
+
+    def run_one_frame(self, dt: float | None = None) -> float:
+        if dt is None:
+            dt = self.clock.tick(settings.FPS) / 1000.0
+        dt = min(dt, settings.MAX_DELTA_TIME)
+
+        for event in pygame.event.get():
+            self.handle_event(event)
+
+        self.update(dt)
+        self.render()
+        pygame.display.flip()
+        return dt
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.QUIT:
+            self.request_quit()
+            return
+
+        if event.type == pygame.KEYDOWN:
+            self.handle_keydown(event.key)
+        elif event.type == pygame.MOUSEMOTION:
+            self.handle_mouse_motion(event.pos)
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            self.handle_mouse_button(event)
+
+    def handle_keydown(self, key: int) -> None:
+        if self.state == GameState.SPLASH:
+            if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE, pygame.K_ESCAPE):
+                self.transition_to(GameState.MAIN_MENU)
+            return
+
+        if self.state == GameState.FLOOR_TRANSITION:
+            if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                self.transition_to(GameState.PLAYING)
+            return
+
+        if self.state == GameState.PLAYING:
+            if key == pygame.K_ESCAPE:
+                self.transition_to(GameState.PAUSED)
+            return
+
+        if self.state == GameState.HOW_TO_PLAY:
+            if key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                self.transition_to(GameState.MAIN_MENU)
+                return
+
+        if self.state == GameState.PAUSED and key == pygame.K_ESCAPE:
+            self.transition_to(GameState.PLAYING)
+            return
+
+        if key in (pygame.K_UP, pygame.K_w):
+            self.move_selection(-1)
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self.move_selection(1)
+        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+            self.activate_selected_button()
+
+    def handle_mouse_motion(self, pos: tuple[int, int]) -> None:
+        group = self.buttons.get(self.state, [])
+        for index, button in enumerate(group):
+            if button.update_hover(pos):
+                self.selected_indices[self.state] = index
+
+    def handle_mouse_button(self, event: pygame.event.Event) -> None:
+        group = self.buttons.get(self.state, [])
+        for index, button in enumerate(group):
+            if button.was_clicked(event):
+                self.selected_indices[self.state] = index
+                self.perform_action(button.action)
+                return
+
+    def move_selection(self, direction: int) -> None:
+        group = self.buttons.get(self.state)
+        if not group:
+            return
+        self.selected_indices[self.state] = (self.selected_indices[self.state] + direction) % len(group)
+
+    def activate_selected_button(self) -> None:
+        group = self.buttons.get(self.state)
+        if not group:
+            return
+        index = self.selected_indices[self.state]
+        self.perform_action(group[index].action)
+
+    def perform_action(self, action: str) -> None:
+        if action == "new_run":
+            self.start_new_run()
+        elif action == "how_to_play":
+            self.transition_to(GameState.HOW_TO_PLAY)
+        elif action == "quit":
+            self.request_quit()
+        elif action == "resume":
+            self.transition_to(GameState.PLAYING)
+        elif action == "restart_run":
+            self.restart_placeholder_run()
+        elif action == "main_menu":
+            self.end_placeholder_run()
+            self.transition_to(GameState.MAIN_MENU)
+        elif action == "continue_floor":
+            if self.placeholder_run is not None:
+                self.placeholder_run.floor += 1
+            self.transition_to(GameState.FLOOR_TRANSITION)
+        elif action == "retry_seed":
+            self.retry_same_seed()
+
+    def update(self, dt: float) -> None:
+        if self.state == GameState.SPLASH:
+            self.splash_elapsed += dt
+            if self.splash_elapsed >= settings.SPLASH_DURATION:
+                self.transition_to(GameState.MAIN_MENU)
+        elif self.state == GameState.FLOOR_TRANSITION:
+            self.floor_transition_elapsed += dt
+            if self.floor_transition_elapsed >= settings.FLOOR_TRANSITION_DURATION:
+                self.transition_to(GameState.PLAYING)
+        elif self.state == GameState.PLAYING and self.placeholder_run is not None:
+            self.placeholder_run.elapsed_time += dt
+
+    def transition_to(self, new_state: GameState) -> None:
+        self.previous_state = self.state
+        self.state = new_state
+
+        if new_state in self.selected_indices:
+            self.selected_indices[new_state] = 0
+        if new_state == GameState.SPLASH:
+            self.splash_elapsed = 0.0
+        elif new_state == GameState.FLOOR_TRANSITION:
+            self.floor_transition_elapsed = 0.0
+
+    def start_new_run(self) -> None:
+        self.next_seed += 1
+        self.placeholder_run = PlaceholderRun(seed=self.next_seed)
+        self.run_exists = True
+        self.transition_to(GameState.PLAYING)
+
+    def restart_placeholder_run(self) -> None:
+        if self.placeholder_run is None:
+            self.placeholder_run = PlaceholderRun(seed=self.next_seed)
+        else:
+            self.placeholder_run = self.placeholder_run.reset_same_seed()
+        self.run_exists = True
+        self.transition_to(GameState.PLAYING)
+
+    def retry_same_seed(self) -> None:
+        self.restart_placeholder_run()
+
+    def end_placeholder_run(self) -> None:
+        self.run_exists = False
+
+    def request_quit(self) -> None:
+        self.running = False
+
+    def shutdown(self) -> None:
+        if self._shutdown_complete:
+            return
+        self.running = False
+        pygame.quit()
+        self._shutdown_complete = True
+
+    def render(self) -> None:
+        if self.state == GameState.SPLASH:
+            self.render_splash()
+        elif self.state == GameState.MAIN_MENU:
+            self.render_main_menu()
+        elif self.state == GameState.HOW_TO_PLAY:
+            self.render_how_to_play()
+        elif self.state == GameState.PLAYING:
+            self.render_playing()
+        elif self.state == GameState.PAUSED:
+            self.render_paused()
+        elif self.state == GameState.WORKSHOP:
+            self.render_workshop()
+        elif self.state == GameState.FLOOR_TRANSITION:
+            self.render_floor_transition()
+        elif self.state == GameState.DEATH:
+            self.render_death()
+        elif self.state == GameState.VICTORY:
+            self.render_victory()
+
+    def render_splash(self) -> None:
+        self.draw_background()
+        self.draw_centered_text("Echoes Below", "title", settings.COLOR_TEXT, 300)
+        self.draw_centered_text("A descent into the unseen", "subtitle", settings.COLOR_ACCENT, 378)
+        self.draw_centered_text("Press Enter, Space or Escape to skip", "small", settings.COLOR_TEXT_MUTED, 620)
+
+    def render_main_menu(self) -> None:
+        self.draw_background()
+        self.draw_centered_text("Echoes Below", "title", settings.COLOR_TEXT, 170)
+        self.draw_centered_text("A descent into the unseen", "body", settings.COLOR_ACCENT, 230)
+        self.draw_button_group(GameState.MAIN_MENU)
+
+    def render_how_to_play(self) -> None:
+        self.draw_background()
+        self.draw_centered_text("How to Play", "subtitle", settings.COLOR_TEXT, 70)
+
+        lines = [
+            "WASD or arrow keys: move",
+            "Space: scan",
+            "F: interact",
+            "Q: module slot 1",
+            "E: module slot 2",
+            "Escape: pause",
+            "F2: debug view",
+            "F3: performance overlay",
+            "",
+            "The environment is hidden in darkness.",
+            "The scan reveals only reachable surfaces.",
+            "Walls and closed doors block the scan.",
+            "Creature images are fading snapshots of previous detected positions.",
+            "Touching a creature ends the run.",
+            "Complete the floor objective and reach the elevator.",
+            "Modules are crafted between floors.",
+            "",
+            "Escape or Backspace returns to the main menu.",
+        ]
+        self.draw_text_lines(lines, 160, 118, line_height=29)
+        self.draw_button_group(GameState.HOW_TO_PLAY)
+
+    def render_playing(self) -> None:
+        self.draw_background()
+        self.draw_centered_text("Gameplay systems under construction", "subtitle", settings.COLOR_TEXT, 270)
+        self.draw_centered_text("Current state: PLAYING", "body", settings.COLOR_ACCENT, 330)
+        self.draw_centered_text("Press Escape to pause", "body", settings.COLOR_TEXT_MUTED, 380)
+
+        if self.placeholder_run is not None:
+            run_line = (
+                f"Floor {self.placeholder_run.floor} | "
+                f"Seed {self.placeholder_run.seed} | "
+                f"Score {self.placeholder_run.score} | "
+                f"Time {self.placeholder_run.elapsed_time:0.1f}s"
+            )
+        else:
+            run_line = "No active placeholder run"
+        self.draw_centered_text(run_line, "small", settings.COLOR_TEXT_MUTED, 430)
+
+    def render_paused(self) -> None:
+        self.render_playing()
+        self.draw_overlay()
+        self.draw_centered_text("Paused", "subtitle", settings.COLOR_TEXT, 240)
+        self.draw_button_group(GameState.PAUSED)
+
+    def render_workshop(self) -> None:
+        self.draw_background()
+        self.draw_centered_text("Elevator Workshop", "subtitle", settings.COLOR_TEXT, 210)
+        self.draw_centered_text("Crafting will be added in a later phase.", "body", settings.COLOR_TEXT_MUTED, 280)
+        self.draw_button_group(GameState.WORKSHOP)
+
+    def render_floor_transition(self) -> None:
+        self.draw_background()
+        floor = self.placeholder_run.floor if self.placeholder_run is not None else 1
+        self.draw_centered_text("Descending...", "subtitle", settings.COLOR_TEXT, 280)
+        self.draw_centered_text(f"Next floor: {floor}", "body", settings.COLOR_ACCENT, 345)
+        self.draw_centered_text("Press Enter or Space to skip", "small", settings.COLOR_TEXT_MUTED, 620)
+
+    def render_death(self) -> None:
+        self.draw_background()
+        run = self.placeholder_run
+        floor = run.floor if run is not None else 1
+        score = run.score if run is not None else 0
+        seed = run.seed if run is not None else self.next_seed
+        self.draw_centered_text("SIGNAL LOST", "title", settings.COLOR_WARNING, 160)
+        self.draw_centered_text(f"Floor {floor} | Score {score} | Seed {seed}", "body", settings.COLOR_TEXT_MUTED, 245)
+        self.draw_button_group(GameState.DEATH)
+
+    def render_victory(self) -> None:
+        self.draw_background()
+        run = self.placeholder_run
+        final_time = run.elapsed_time if run is not None else 0.0
+        score = run.score if run is not None else 0
+        self.draw_centered_text("ECHO RECOVERED", "title", settings.COLOR_SUCCESS, 180)
+        self.draw_centered_text(f"Final time {final_time:0.1f}s | Score {score}", "body", settings.COLOR_TEXT_MUTED, 275)
+        self.draw_button_group(GameState.VICTORY)
+
+    def draw_background(self) -> None:
+        self.screen.fill(settings.COLOR_BACKGROUND)
+        for x in range(0, settings.WINDOW_WIDTH, 80):
+            pygame.draw.line(self.screen, settings.COLOR_BACKGROUND_ALT, (x, 0), (x, settings.WINDOW_HEIGHT))
+        for y in range(0, settings.WINDOW_HEIGHT, 80):
+            pygame.draw.line(self.screen, settings.COLOR_BACKGROUND_ALT, (0, y), (settings.WINDOW_WIDTH, y))
+        pygame.draw.rect(
+            self.screen,
+            settings.COLOR_ACCENT_DIM,
+            pygame.Rect(34, 34, settings.WINDOW_WIDTH - 68, settings.WINDOW_HEIGHT - 68),
+            width=1,
+            border_radius=6,
+        )
+
+    def draw_overlay(self) -> None:
+        self.overlay_surface.fill(settings.COLOR_OVERLAY)
+        self.screen.blit(self.overlay_surface, (0, 0))
+
+    def draw_centered_text(self, text: str, font_key: str, color: tuple[int, int, int], y: int) -> None:
+        font = self.fonts[font_key]
+        image = font.render(text, True, color)
+        rect = image.get_rect(center=(settings.WINDOW_WIDTH // 2, y))
+        self.screen.blit(image, rect)
+
+    def draw_text_lines(self, lines: list[str], x: int, y: int, line_height: int) -> None:
+        font = self.fonts["small"]
+        for offset, line in enumerate(lines):
+            if not line:
+                continue
+            image = font.render(line, True, settings.COLOR_TEXT if offset < 8 else settings.COLOR_TEXT_MUTED)
+            self.screen.blit(image, (x, y + offset * line_height))
+
+    def draw_button_group(self, state: GameState) -> None:
+        group = self.buttons.get(state, [])
+        selected_index = self.selected_indices.get(state, 0)
+        for index, button in enumerate(group):
+            button.draw(self.screen, self.fonts["button"], selected=index == selected_index)
