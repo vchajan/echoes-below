@@ -2,7 +2,7 @@
 
 Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is currently in Phase 4. It contains the application shell, state system, asset manager, generated placeholder spritesheets, seeded procedural floor generation, stronger generator validation, placeholder screens, tests and headless verification tools. Full gameplay systems are planned for later phases.
+This repository is currently in Phase 5. It contains the application shell, state system, asset manager, generated placeholder spritesheets, seeded procedural floor generation, stronger generator validation, player movement, a camera-driven playable world view, tile collisions, tests and headless verification tools. Scan raycasting, creatures, objectives, materials, crafting, modules and scoring are planned for later phases.
 
 ## Setup
 
@@ -27,13 +27,13 @@ python main.py
 - Up and Down: move menu selection
 - Enter or Space: confirm selected menu item
 - Mouse: hover and click buttons
-- Escape: skip splash, pause from the playing placeholder, resume from pause or return from How to Play
+- WASD or arrow keys: move the player during PLAYING
+- Escape: skip splash, pause during PLAYING, resume from pause or return from How to Play
 - Backspace: return from How to Play
-- F2: toggle procedural floor debug overlay in the playing placeholder
+- F2: toggle the camera-space debug overlay during PLAYING
 
 Planned gameplay controls:
 
-- WASD or arrow keys: move
 - Space: scan
 - F: interact
 - Q: module slot 1
@@ -54,11 +54,12 @@ python tools/generation_test.py
 python tools/generation_preview.py --seed 12345 --floor 1 --headless
 python tools/generation_preview.py --seed 12345 --floor 2 --headless
 python tools/generation_preview.py --seed 12345 --floor 3 --headless
+python tools/player_preview.py --seed 12345 --headless
 python -m py_compile main.py
 python -c "import main; print('main import ok')"
 ```
 
-Gameplay systems such as movement, procedural generation, scanning, creatures, objectives and crafting are implemented in later phases.
+Gameplay systems such as scan raycasting, creatures, objectives, materials and crafting are implemented in later phases.
 
 ## Assets
 
@@ -99,11 +100,19 @@ python tools/asset_preview.py --headless
 
 The preview is saved to `artifacts/asset_preview.png`.
 
-## Procedural Generation
+## Procedural Generation And Playable View
 
 Phase 4 uses a deterministic room-and-corridor floor generator with bounded retries. It uses local `random.Random` instances only. A supplied base seed, floor number and generator configuration produce the same successful attempt index, derived attempt seed, room rectangles, graph edges, corridors, tile grid, player spawn, elevator tile and candidate lists.
 
-New Run currently generates a Floor 1 debug overview. The map is shown as a temporary scaled preview using the Phase 2 industrial tileset. This is not the final gameplay camera, and there is no player movement yet.
+New Run now generates Floor 1 and creates a physical player at the validated spawn tile. The map is rendered at full size with 48 px tiles, and the screen shows a camera viewport centered on the player and clamped to the generated world bounds.
+
+The player uses the Phase 2 spritesheet animations for idle and walking in all four directions. Movement uses delta time, normalizes diagonal input and resolves against a smaller lower-body collision rectangle so the sprite can be taller than its floor footprint.
+
+Movement collision uses the central tile metadata in `game/world/tiles.py`. `VOID`, `WALL`, `DAMAGED_WALL`, `OBSTACLE` and `PILLAR` block movement; floor variants, doorways and elevator floor tiles are walkable. Out-of-bounds map space is always blocking. Axis-separated resolution allows sliding along free axes and uses bounded substeps to avoid tunnelling on slower frames.
+
+Normal PLAYING mode is intentionally dark as a temporary Phase 5 visibility stand-in. A cached local glow around the player reveals only the immediate area. This is not the final scan mechanic; fixed-origin scan traces and occlusion are still future work.
+
+F2 debug mode disables the heavy darkness and draws camera-space diagnostics: tile grid, room boundaries and IDs, graph links, doorway candidates, creature candidates, objective candidates, spawn/elevator markers, player visual rect, player collision rect and current tile.
 
 Validation now checks walkable connectivity, elevator reachability, graph connectivity, graph cycle rank, safe player/elevator placement, obstacle connectivity, doorway validity, corridor continuity and future content candidates. Floor 2 and Floor 3 require at least one graph cycle. Floor 3 prefers two loops when room count allows it.
 
@@ -137,6 +146,15 @@ python tools/generation_preview.py --seed 12345 --floor 3 --headless
 ```
 
 The previews are saved to `artifacts/generation_preview_12345_floor1.png`, `artifacts/generation_preview_12345_floor2.png` and `artifacts/generation_preview_12345_floor3.png`.
+
+Preview player movement and camera behavior with:
+
+```powershell
+python tools/player_preview.py --seed 12345
+python tools/player_preview.py --seed 12345 --headless
+```
+
+Headless mode saves `artifacts/player_preview_12345_start.png` and `artifacts/player_preview_12345_moved.png`.
 
 Run the Phase 4 stress test with:
 

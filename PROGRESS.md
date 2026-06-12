@@ -9,11 +9,12 @@ Last updated: 2026-06-12
 - [x] Phase 2: Asset manager, spritesheets, tiles, animations and visible score HUD.
 - [x] Phase 3: Seeded room-and-corridor procedural generation with validation.
 - [x] Phase 4: Procedural generator validation, graph loops and safe content placement.
-- [ ] Phase 5: Fixed-origin scan with occlusion, expansion and fading traces.
-- [ ] Phase 6: Creature movement, collision death and scan snapshots.
-- [ ] Phase 7: Three-floor run flow, floor transitions, death options and victory.
-- [ ] Phase 8: Workshop, materials and active modules.
-- [ ] Phase 9: Performance overlay, debug world view, polish and final requirement pass.
+- [x] Phase 5: Player movement, camera, real-size world rendering and tile collisions.
+- [ ] Phase 6: Fixed-origin scan with occlusion, expansion and fading traces.
+- [ ] Phase 7: Creature movement, collision death and scan snapshots.
+- [ ] Phase 8: Three-floor run flow, floor transitions, death options and victory.
+- [ ] Phase 9: Workshop, materials and active modules.
+- [ ] Phase 10: Performance overlay, debug world view, polish and final requirement pass.
 
 ## Phase 0 Notes
 
@@ -128,3 +129,58 @@ Last updated: 2026-06-12
 - `python tools/generation_preview.py --seed 12345 --floor 3 --headless`: passed.
 - `python -m py_compile main.py`: passed.
 - Previews confirmed at `artifacts/generation_preview_12345_floor1.png`, `artifacts/generation_preview_12345_floor2.png` and `artifacts/generation_preview_12345_floor3.png`.
+
+## Phase 5 Notes
+
+- Added a physical `Player` entity with float world position, cached idle/walk animations, facing state, smaller lower-body collision rect, feet/current-tile helpers and bounded movement substeps.
+- Added a `Camera` that centers on the player, clamps to generated world bounds and exposes world/screen conversion helpers.
+- Added reusable static-world collision helpers for world-to-tile conversion, blocking tile lookup, nearby overlap queries and axis-separated collision resolution.
+- Replaced the PLAYING scaled overview with a full-size 48 px tile world view rendered through a player-centered camera.
+- Added a cached static floor renderer that rebuilds only when the generated floor render key changes. Future tile mutation should explicitly clear or rebuild this static cache.
+- Added temporary local darkness and a cached player glow. This is only a Phase 5 visibility stand-in, not the final scan.
+- Updated F2 to draw camera-space diagnostics over the real viewport, including room boundaries, IDs, graph edges, candidates, spawn/elevator markers, player visual rect, collision rect and current tile.
+- Updated pause/restart flow so movement, animation and camera stop while paused, and restart recreates the generated Floor 1 session, player and camera.
+- Current limitations reserved for later phases: no dynamic doors, fixed-origin scan, scan occlusion, creatures, AI, floor objectives, materials, crafting, modules, final score or victory logic.
+
+## Phase 5 Created Or Updated Files
+
+- `game/camera.py`
+- `game/entities/__init__.py`
+- `game/entities/player.py`
+- `game/world/collision.py`
+- `game/world/rendering.py`
+- `game/app.py`
+- `game/settings.py`
+- `tests/test_camera.py`
+- `tests/test_collision.py`
+- `tests/test_player.py`
+- `tests/test_world_rendering.py`
+- `tools/smoke_test.py`
+- `tools/player_preview.py`
+- `README.md`
+- `PROGRESS.md`
+
+## Phase 5 Test Results
+
+- Baseline before editing: `python tools/generate_placeholder_assets.py`, `python -m unittest discover -s tests`, `python tools/smoke_test.py`, `python tools/generation_test.py`, `python tools/generation_preview.py --seed 12345 --floor 1 --headless` and `python -m py_compile main.py` all passed.
+- `python tools/generate_placeholder_assets.py`: passed.
+- `python -m unittest discover -s tests`: passed, 109 tests.
+- `python tools/smoke_test.py`: passed.
+- `python tools/generation_test.py`: passed for 450 generated floors.
+- `python tools/player_preview.py --seed 12345 --headless`: passed.
+- `python -m py_compile main.py`: passed.
+- `python -c "import main; print('main import ok')"`: passed.
+- Player previews confirmed at `artifacts/player_preview_12345_start.png` and `artifacts/player_preview_12345_moved.png`.
+
+## Phase 5 Manual Checklist
+
+- Run `python main.py`.
+- Start New Run.
+- Move with WASD and arrow keys.
+- Verify diagonal movement is not faster than straight movement.
+- Walk into walls, damaged walls, obstacles and pillars.
+- Verify sliding along a free axis when one axis is blocked.
+- Walk to each camera edge and confirm the camera clamps to the map.
+- Toggle F2 and confirm debug overlays follow the camera and player.
+- Pause and resume.
+- Restart the run from pause and confirm the player returns to the regenerated Floor 1 session.

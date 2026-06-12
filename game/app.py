@@ -3,11 +3,19 @@ from __future__ import annotations
 import pygame
 
 from game.assets import EFFECT_IMAGE_PATHS, MODULE_ICON_PATHS, AssetManager
+from game.camera import Camera
+from game.entities.player import Player, movement_direction_from_bools
 from game import settings
 from game.states import GameState, PlaceholderRun
 from game.ui.buttons import Button
 from game.world.generator import FloorGenerator, GenerationError
-from game.world.rendering import draw_debug_overlay, render_floor_surface, scale_floor_surface
+from game.world.rendering import (
+    StaticWorldRenderer,
+    apply_darkness,
+    build_local_glow_surface,
+    draw_camera_debug_overlay,
+    draw_debug_overlay,
+)
 
 
 class Game:
@@ -23,8 +31,13 @@ class Game:
         self.assets = AssetManager(audio_available=self.audio_available)
         self.visual_assets = self._load_visual_assets()
         self.overlay_surface = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
+        self.darkness_surface = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
+        self.local_glow_surface = build_local_glow_surface(settings.LOCAL_VISIBILITY_RADIUS)
         self.floor_generator = FloorGenerator()
+        self.world_renderer = StaticWorldRenderer(self.assets, settings.TILE_SIZE)
         self.debug_world_view = False
+        self.player: Player | None = None
+        self.camera: Camera | None = None
         self.floor_world_surface: pygame.Surface | None = None
         self.floor_preview_surface: pygame.Surface | None = None
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
@@ -245,6 +258,8 @@ class Game:
             if self.placeholder_run is not None:
                 self.placeholder_run.floor += 1
                 self.placeholder_run.generated_floor = None
+                self.player = None
+                self.camera = None
                 self.floor_world_surface = None
                 self.floor_preview_surface = None
             self.transition_to(GameState.FLOOR_TRANSITION)
@@ -262,6 +277,35 @@ class Game:
                 self.transition_to(GameState.PLAYING)
         elif self.state == GameState.PLAYING and self.placeholder_run is not None:
             self.placeholder_run.elapsed_time += dt
+            self.update_gameplay(dt)
+
+    def update_gameplay(
+        self,
+        dt: float,
+        movement_direction: pygame.Vector2 | tuple[float, float] | None = None,
+    ) -> None:
+        if (
+            self.placeholder_run is None
+            or self.placeholder_run.generated_floor is None
+            or self.player is None
+            or self.camera is None
+        ):
+            return
+
+        if movement_direction is None:
+            keys = pygame.key.get_pressed()
+            movement_direction = movement_direction_from_bools(
+                keys[pygame.K_w] or keys[pygame.K_UP],
+                keys[pygame.K_s] or keys[pygame.K_DOWN],
+                keys[pygame.K_a] or keys[pygame.K_LEFT],
+                keys[pygame.K_d] or keys[pygame.K_RIGHT],
+            )
+        direction = pygame.Vector2(movement_direction)
+        if direction.length_squared() > 1:
+            direction = direction.normalize()
+
+        self.player.update(direction, dt, self.placeholder_run.generated_floor)
+        self.camera.update(self.player.world_position, dt)
 
     def transition_to(self, new_state: GameState) -> None:
         self.previous_state = self.state
@@ -274,7 +318,7 @@ class Game:
         elif new_state == GameState.FLOOR_TRANSITION:
             self.floor_transition_elapsed = 0.0
         elif new_state == GameState.PLAYING and self.placeholder_run is not None:
-            if self.placeholder_run.generated_floor is None:
+            if self.placeholder_run.generated_floor is None or self.player is None or self.camera is None:
                 self.prepare_generated_floor()
 
     def start_new_run(self) -> None:
@@ -298,10 +342,14 @@ class Game:
 
     def end_placeholder_run(self) -> None:
         self.run_exists = False
+        self.placeholder_run = None
+        self.player = None
+        self.camera = None
         self.floor_world_surface = None
         self.floor_preview_surface = None
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
         self.generation_error = None
+        self.world_renderer.clear()
 
     def request_quit(self) -> None:
         self.running = False
@@ -317,16 +365,20 @@ class Game:
         except GenerationError as exc:
             self.generation_error = str(exc)
             self.placeholder_run.generated_floor = None
+            self.player = None
+            self.camera = None
             self.floor_world_surface = None
             self.floor_preview_surface = None
             return
 
         self.generation_error = None
         self.placeholder_run.generated_floor = generated_floor
-        tile_size = self.floor_generator.config_for_floor(self.placeholder_run.floor).tile_size
-        self.floor_world_surface = render_floor_surface(generated_floor, self.assets, tile_size)
-        self.floor_preview_surface, _ = scale_floor_surface(self.floor_world_surface, (980, 520))
-        self.floor_preview_rect = self.floor_preview_surface.get_rect(center=(settings.WINDOW_WIDTH // 2, 410))
+        self.floor_world_surface = self.world_renderer.build_for_floor(generated_floor)
+        self.floor_preview_surface = None
+        self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
+        self.player = Player(generated_floor.player_spawn, self.assets, settings.TILE_SIZE)
+        self.camera = Camera(settings.WINDOW_SIZE, generated_floor.world_size_pixels(settings.TILE_SIZE))
+        self.camera.update(self.player.world_position)
 
     def shutdown(self) -> None:
         if self._shutdown_complete:
@@ -415,25 +467,50 @@ class Game:
         self.draw_button_group(GameState.HOW_TO_PLAY)
 
     def render_playing(self) -> None:
-        self.draw_background()
-        self.render_generated_floor_preview()
-        self.draw_centered_text("Procedural floor preview", "subtitle", settings.COLOR_TEXT, 50)
-        self.draw_centered_text("Gameplay systems under construction", "body", settings.COLOR_ACCENT, 92)
+        if (
+            self.placeholder_run is None
+            or self.placeholder_run.generated_floor is None
+            or self.player is None
+            or self.camera is None
+        ):
+            self.draw_background()
+            self.render_generated_floor_preview()
+            if self.generation_error is None:
+                self.draw_centered_text("Preparing playable floor...", "subtitle", settings.COLOR_TEXT, 50)
+            return
 
-        if self.placeholder_run is not None:
-            generated_floor = self.placeholder_run.generated_floor
-            if generated_floor is not None:
-                run_line = (
-                    f"Floor {self.placeholder_run.floor} | Seed {self.placeholder_run.seed} | "
-                    f"Rooms {len(generated_floor.rooms)} | Graph edges {len(generated_floor.graph_edges)} | "
-                    f"Time {self.placeholder_run.elapsed_time:0.1f}s"
-                )
-            else:
-                run_line = f"Floor {self.placeholder_run.floor} | Seed {self.placeholder_run.seed} | generation unavailable"
+        generated_floor = self.placeholder_run.generated_floor
+        self.world_renderer.render_view(self.screen, generated_floor, self.camera)
+
+        player_screen_rect = self.camera.world_rect_to_screen(self.player.visual_rect)
+        if not self.debug_world_view:
+            apply_darkness(
+                self.screen,
+                self.darkness_surface,
+                self.local_glow_surface,
+                player_screen_rect.center,
+            )
+            self.screen.blit(self.player.image, player_screen_rect)
         else:
-            run_line = "No active placeholder run"
-        self.draw_centered_text(run_line, "small", settings.COLOR_TEXT_MUTED, 124)
-        self.draw_centered_text("Escape pauses | F2 toggles room graph and candidate overlays", "small", settings.COLOR_TEXT_MUTED, 672)
+            self.screen.blit(self.player.image, player_screen_rect)
+            draw_camera_debug_overlay(
+                self.screen,
+                generated_floor,
+                self.camera,
+                settings.TILE_SIZE,
+                self.fonts["small"],
+                self.player,
+            )
+            report = generated_floor.validation_report
+            if report is not None:
+                debug_lines = [
+                    f"Attempt {generated_floor.generation_attempt} | Attempt seed {generated_floor.attempt_seed}",
+                    f"Validation {'OK' if report.is_valid else 'FAILED'} | Cycle rank {report.graph_cycle_rank}",
+                    f"Connectivity {report.connectivity_ratio:0.3f} | Creatures {len(generated_floor.candidate_creature_spawns)}",
+                ]
+                self.draw_text_lines(debug_lines, 16, 112, 24)
+
+        self.draw_gameplay_hud()
 
     def render_paused(self) -> None:
         self.render_playing()
@@ -521,6 +598,29 @@ class Game:
                 continue
             image = font.render(line, True, settings.COLOR_TEXT if offset < 8 else settings.COLOR_TEXT_MUTED)
             self.screen.blit(image, (x, y + offset * line_height))
+
+    def draw_gameplay_hud(self) -> None:
+        if self.placeholder_run is None or self.player is None:
+            return
+        hud_lines = [
+            f"Floor {self.placeholder_run.floor}",
+            f"Seed {self.placeholder_run.seed}",
+            f"World ({self.player.world_position.x:0.1f}, {self.player.world_position.y:0.1f})",
+            f"Tile {self.player.current_tile}",
+            f"F2 Debug {'ON' if self.debug_world_view else 'OFF'}",
+            "Esc Pause",
+        ]
+        font = self.fonts["small"]
+        width = 288
+        height = 18 + len(hud_lines) * 24
+        panel = pygame.Rect(12, 12, width, height)
+        self.overlay_surface.fill((0, 0, 0, 0))
+        pygame.draw.rect(self.overlay_surface, (6, 10, 14, 182), panel, border_radius=6)
+        pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, panel, width=1, border_radius=6)
+        self.screen.blit(self.overlay_surface, (0, 0))
+        for index, line in enumerate(hud_lines):
+            color = settings.COLOR_TEXT if index < 4 else settings.COLOR_TEXT_MUTED
+            self.screen.blit(font.render(line, True, color), (24, 24 + index * 24))
 
     def draw_button_group(self, state: GameState) -> None:
         group = self.buttons.get(state, [])
