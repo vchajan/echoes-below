@@ -113,3 +113,11 @@ The implemented scan architecture lives in `game/systems/`:
 - `scan.py` contains the fixed-origin wave, cooldown, historical static hits, fading world-space traces, safe contour connection rules, bounded scan threat-event hooks, diagnostics and a cached viewport renderer.
 
 Static geometry is raycast once when Space is pressed, never every frame. The active wave only compares its previous and current radius against sorted hit distances. Dynamic doors use the existing `DynamicBlockerRegistry`, so movement, scan and line-of-sight passability share the same authoritative door state. Future moving-creature detection will use the reusable line-of-sight function at the moment the wave crosses each creature rather than precomputing creature positions.
+## Phase 8 Object Echo Architecture Notes
+
+- `game/entities/scan_objects.py` defines animated scan-detectable materials and the elevator entity. It exposes fixed IDs, world positions and cached current outline frames without coupling entities to the main application.
+- `game/systems/snapshots.py` owns entity-front crossing checks, one-evaluation-per-scan tracking, line-of-sight validation, copied fixed-position echoes, fade/expiry and rendering.
+- `game/world/content_generation.py` deterministically places materials into validated candidate rooms and creates the elevator from generated-floor metadata.
+- `ScanSystem.last_wave_step` exposes the previous/current wave annulus for one update, allowing object and future creature detection without recalculating static rays.
+- Run material counters remain simple dictionary data in `PlaceholderRun`; the later workshop can consume them without changing pickup behaviour.
+

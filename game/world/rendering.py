@@ -4,6 +4,7 @@ import math
 
 import pygame
 
+from game import settings
 from game.assets import AssetManager
 from game.camera import Camera
 from game.entities.door import DynamicDoor
@@ -343,3 +344,48 @@ def draw_camera_debug_overlay(
                 (221, 235, 232),
             )
             surface.blit(label, (16, surface.get_height() - 34))
+
+
+def draw_floor_content_debug(
+    surface: pygame.Surface,
+    floor_content,
+    camera: Camera,
+    font: pygame.font.Font | None = None,
+) -> None:
+    screen_rect = surface.get_rect()
+    entities = [*floor_content.materials, floor_content.elevator]
+    for entity in entities:
+        if not getattr(entity, "scan_active", True):
+            continue
+        rect = camera.world_rect_to_screen(entity.visual_rect)
+        if not screen_rect.colliderect(rect):
+            continue
+        surface.blit(entity.image, rect)
+        pygame.draw.rect(surface, (118, 241, 173), rect, 1)
+        if font is not None:
+            label = font.render(
+                f"{entity.scan_category}:{entity.unique_id}",
+                True,
+                (118, 241, 173),
+            )
+            surface.blit(label, (rect.left, max(0, rect.top - 17)))
+
+
+def draw_material_contact_hints(
+    surface: pygame.Surface,
+    materials,
+    player_world_position: pygame.Vector2,
+    camera: Camera,
+) -> None:
+    screen_rect = surface.get_rect()
+    for pickup in materials:
+        if not pickup.scan_active:
+            continue
+        distance = pickup.world_position.distance_to(player_world_position)
+        if distance > settings.MATERIAL_CONTACT_HINT_RADIUS:
+            continue
+        position = tuple(round(value) for value in camera.world_to_screen(pickup.world_position))
+        if not screen_rect.collidepoint(position):
+            continue
+        radius = 2 if distance > settings.MATERIAL_CONTACT_HINT_RADIUS * 0.45 else 3
+        pygame.draw.circle(surface, (90, 230, 242), position, radius)

@@ -2,7 +2,7 @@
 
 Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is currently in Phase 6. It contains the application shell, state system, asset manager, generated placeholder spritesheets, seeded procedural floor generation, stronger generator validation, player movement, a camera-driven playable world view, tile collisions, dynamic doors, blocker interfaces, tests and headless verification tools. Scan raycasting, creatures, objectives, materials, crafting, modules and scoring are planned for later phases.
+This repository is currently complete through Phase 8. It contains the application shell, state system, cached asset pipeline, seeded and validated procedural floors, player movement, camera and collisions, dynamic doors, fixed-origin DDA scan occlusion, fading static traces, generic object echoes, deterministic material pickups, elevator scan states, score/material counters, tests and headless preview tools. Moving creatures, AI, floor objectives, crafting and active modules are later phases.
 
 ## Setup
 
@@ -227,3 +227,25 @@ Headless preview output:
 - `artifacts/scan_preview_12345_floor2_camera_shift.png`
 
 The benchmark measures only static scan computation. It does not claim graphical 60 FPS; interactive rendering still requires manual verification on the target computer.
+## Scan-Detectable Objects, Materials And Elevator
+
+Phase 8 adds a generic echo-snapshot layer for objects that exist in the world but are hidden during normal darkness. The scan wave evaluates an object only when the front reaches its current distance from the fixed origin. It then performs the same line-of-sight test used by raycasting. A visible object produces one copied outline frame for that scan; the echo stays at the captured world position, fades independently and does not follow the source object.
+
+Procedural floors now receive deterministic optional materials:
+
+- `scrap`
+- `circuit`
+- `power_cell`
+
+They are placed on validated walkable tiles away from the spawn, elevator and doorways. Collection is collision-based, idempotent, adds five points and updates the run counters shown in the HUD. Their normal sprites remain hidden outside F2 debug mode; a tiny contact hint appears only at very close range.
+
+The elevator is a scan-detectable entity with locked, unlocked and active states. Its state controls the captured outline colour and animation frame. Final floor-transition interaction is implemented in later objective phases.
+
+Create deterministic object-echo screenshots with:
+
+```powershell
+python tools/snapshot_preview.py --seed 12345 --floor 1 --headless
+```
+
+The tool saves detected, collected, fading and expired snapshots under `artifacts/`, so this system can be checked without searching manually through a random floor.
+
