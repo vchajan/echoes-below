@@ -15,6 +15,7 @@ from game import settings
 from game.app import Game
 from game.entities.door import DoorState, DoorType, DynamicDoor
 from game.states import GameState
+from game.systems.raycasting import has_line_of_sight
 from game.world import collision
 from game.world.blockers import BlockerPurpose
 
@@ -62,6 +63,33 @@ def find_walkable_tile_next_to_blocker(game: Game) -> tuple[tuple[int, int], pyg
                         collision.tile_to_world_rect(blocker_x, blocker_y, settings.TILE_SIZE),
                     )
     raise AssertionError("Could not find a walkable tile next to a blocker.")
+
+
+
+
+def find_scan_tile_for_creature(game: Game, creature) -> tuple[int, int]:
+    require(game.placeholder_run is not None, "Run was not created.")
+    floor = game.placeholder_run.generated_floor
+    require(floor is not None, "Floor was not generated.")
+    for tile in floor.walkable_tiles():
+        if tile == creature.current_tile:
+            continue
+        origin = pygame.Vector2(
+            (tile[0] + 0.5) * settings.TILE_SIZE,
+            (tile[1] + 0.5) * settings.TILE_SIZE,
+        )
+        distance = origin.distance_to(creature.scan_position)
+        if not (settings.TILE_SIZE * 1.5 <= distance <= settings.SCAN_MAX_RADIUS * 0.6):
+            continue
+        if has_line_of_sight(
+            origin,
+            creature.scan_position,
+            floor,
+            game.dynamic_blockers,
+            settings.TILE_SIZE,
+        ):
+            return tile
+    raise AssertionError("Could not find a visible scan tile for the creature.")
 
 
 def find_powered_door(game: Game) -> DynamicDoor:
@@ -197,6 +225,49 @@ def main() -> int:
         game.handle_keydown(pygame.K_F3)
         require(not game.performance_overlay, "F3 did not disable the performance overlay.")
 
+        require(game.creatures, "No creature was created for the current floor.")
+        creature = game.creatures[0]
+        creature.movement_enabled = False
+        require(game.player is not None, "Player missing during creature smoke test.")
+
+        scan_tile = find_scan_tile_for_creature(game, creature)
+        place_player_at(game, scan_tile)
+        while not game.scan_system.ready:
+            game.update_gameplay(1.0 / settings.FPS, pygame.Vector2())
+        require(game.trigger_scan(), "Creature snapshot scan did not trigger.")
+        for _ in range(180):
+            game.update_gameplay(1.0 / settings.FPS, pygame.Vector2())
+            if game.snapshot_system.snapshots_for_source(creature.unique_id):
+                break
+        creature_snapshots = game.snapshot_system.snapshots_for_source(creature.unique_id)
+        require(len(creature_snapshots) == 1, "Creature scan did not create exactly one snapshot.")
+        captured_position = creature_snapshots[0].world_position.copy()
+        floor = game.placeholder_run.generated_floor
+        moved = False
+        cx, cy = creature.current_tile
+        for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+            tile = (cx + dx, cy + dy)
+            if floor.is_walkable(*tile):
+                creature.place_at_tile(tile)
+                moved = True
+                break
+        require(moved, "Could not move creature after snapshot capture.")
+        require(
+            creature_snapshots[0].world_position == captured_position,
+            "Creature snapshot followed the real creature.",
+        )
+
+        game.player.world_position = creature.world_position.copy()
+        game.player._sync_rects_from_world()
+        game.camera.update(game.player.world_position)
+        game.update_gameplay(0.0, pygame.Vector2())
+        require(game.state == GameState.DEATH, "Contact with creature did not trigger death.")
+        game.retry_same_seed()
+        require(game.state == GameState.PLAYING, "Retry same seed did not return to PLAYING.")
+        require(game.placeholder_run is not None and game.placeholder_run.restart_count == 1, "Retry same seed did not increment restart count.")
+        require(game.creatures, "Creature was not recreated after retry.")
+        require(game.snapshot_system.snapshots == [], "Retry retained creature snapshots.")
+
         door = find_powered_door(game)
         place_player_at(game, approach_tile_for_door(game, door))
         game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
@@ -246,6 +317,7 @@ def main() -> int:
         old_player = game.player
         old_camera = game.camera
         old_doors = list(game.doors)
+        restart_count_before = game.placeholder_run.restart_count if game.placeholder_run is not None else 0
         game.transition_to(GameState.PAUSED)
         game.selected_indices[GameState.PAUSED] = 1
         game.activate_selected_button()
@@ -253,7 +325,11 @@ def main() -> int:
         require(game.player is not None and game.player is not old_player, "Restart did not create a fresh player.")
         require(game.camera is not None and game.camera is not old_camera, "Restart did not create a fresh camera.")
         require(game.doors and all(door not in game.doors for door in old_doors), "Restart did not create fresh doors.")
-        require(game.placeholder_run is not None and game.placeholder_run.restart_count == 1, "Restart count was not updated.")
+        require(
+            game.placeholder_run is not None
+            and game.placeholder_run.restart_count == restart_count_before + 1,
+            "Restart count was not updated.",
+        )
         require(game.scan_system.active_wave is None, "Restart retained an active scan wave.")
         require(not game.scan_system.traces, "Restart retained scan traces.")
         require(not game.snapshot_system.snapshots, "Restart retained object echo snapshots.")

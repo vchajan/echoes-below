@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import pygame
 
+import random
+
 from game.assets import EFFECT_IMAGE_PATHS, MODULE_ICON_PATHS, AssetManager
 from game.camera import Camera
+from game.entities.creature import Creature
 from game.entities.door import DoorType, DynamicDoor
 from game.entities.scan_objects import ElevatorEntity, MaterialPickup
 from game.entities.player import Player, movement_direction_from_bools
@@ -60,6 +63,10 @@ class Game:
         self.floor_content: FloorContent | None = None
         self.material_pickups: list[MaterialPickup] = []
         self.elevator_entity: ElevatorEntity | None = None
+        self.creatures: list[Creature] = []
+        self.creatures_rng: random.Random | None = None
+        self.death_creature_id: str | None = None
+        self.death_world_position: pygame.Vector2 | None = None
         self.dynamic_blockers = DynamicBlockerRegistry([], settings.TILE_SIZE)
         self.floor_world_surface: pygame.Surface | None = None
         self.floor_preview_surface: pygame.Surface | None = None
@@ -307,6 +314,8 @@ class Game:
                 self.floor_content = None
                 self.material_pickups = []
                 self.elevator_entity = None
+                self.creatures = []
+                self.creatures_rng = None
                 self.snapshot_system.reset()
                 self.floor_world_surface = None
                 self.floor_preview_surface = None
@@ -334,11 +343,16 @@ class Game:
         movement_direction: pygame.Vector2 | tuple[float, float] | None = None,
     ) -> None:
         if (
-            self.placeholder_run is None
+            self.state is not GameState.PLAYING
+            or self.placeholder_run is None
             or self.placeholder_run.generated_floor is None
             or self.player is None
             or self.camera is None
         ):
+            return
+
+        if self._player_touches_creature():
+            self._enter_death_state()
             return
 
         if movement_direction is None:
@@ -353,12 +367,28 @@ class Game:
         if direction.length_squared() > 1:
             direction = direction.normalize()
 
+        creature_rects = [creature.collision_rect for creature in self.creatures]
         for door in self.doors:
-            door.update(dt, self.player.collision_rect, floor_powered=self.floor_power_available)
+            door.update(
+                dt,
+                self.player.collision_rect,
+                other_entity_rects=creature_rects,
+                floor_powered=self.floor_power_available,
+            )
         if self.floor_content is not None:
             self.floor_content.update(dt)
 
+        for creature in self.creatures:
+            creature.update(dt, self.placeholder_run.generated_floor, self.dynamic_blockers)
+        if self._player_touches_creature():
+            self._enter_death_state()
+            return
+
         self.player.update(direction, dt, self.placeholder_run.generated_floor, self.dynamic_blockers)
+        if self._player_touches_creature():
+            self._enter_death_state()
+            return
+
         self.camera.update(self.player.world_position, dt)
         self.scan_system.update(dt)
         self.snapshot_system.update(
@@ -371,10 +401,32 @@ class Game:
         )
         self.collect_material_pickups()
 
+    def _player_touches_creature(self) -> Creature | None:
+        if self.player is None:
+            return None
+        return next(
+            (
+                creature
+                for creature in self.creatures
+                if self.player.collision_rect.colliderect(creature.collision_rect)
+            ),
+            None,
+        )
+
+    def _enter_death_state(self) -> None:
+        creature = self._player_touches_creature()
+        self.death_creature_id = creature.unique_id if creature is not None else None
+        self.death_world_position = (
+            creature.world_position.copy() if creature is not None else None
+        )
+        self.transition_to(GameState.DEATH)
+
     def scan_detectable_entities(self) -> list[object]:
-        if self.floor_content is None:
-            return []
-        return self.floor_content.scan_entities
+        entities: list[object] = []
+        if self.floor_content is not None:
+            entities.extend(self.floor_content.scan_entities)
+        entities.extend(self.creatures)
+        return entities
 
     def collect_material_pickups(self) -> None:
         if self.player is None or self.placeholder_run is None:
@@ -422,6 +474,8 @@ class Game:
                 self.prepare_generated_floor()
 
     def start_new_run(self) -> None:
+        self.death_creature_id = None
+        self.death_world_position = None
         self.next_seed += 1
         self.placeholder_run = PlaceholderRun(seed=self.next_seed)
         self.run_exists = True
@@ -429,6 +483,8 @@ class Game:
         self.transition_to(GameState.PLAYING)
 
     def restart_placeholder_run(self) -> None:
+        self.death_creature_id = None
+        self.death_world_position = None
         if self.placeholder_run is None:
             self.placeholder_run = PlaceholderRun(seed=self.next_seed)
         else:
@@ -450,6 +506,10 @@ class Game:
         self.floor_content = None
         self.material_pickups = []
         self.elevator_entity = None
+        self.creatures = []
+        self.creatures_rng = None
+        self.death_creature_id = None
+        self.death_world_position = None
         self.floor_power_available = True
         self.floor_world_surface = None
         self.floor_preview_surface = None
@@ -482,6 +542,8 @@ class Game:
             self.floor_content = None
             self.material_pickups = []
             self.elevator_entity = None
+            self.creatures = []
+            self.creatures_rng = None
             self.floor_world_surface = None
             self.floor_preview_surface = None
             return
@@ -506,6 +568,35 @@ class Game:
         self.floor_content = create_floor_content(generated_floor, self.assets, settings.TILE_SIZE)
         self.material_pickups = self.floor_content.materials
         self.elevator_entity = self.floor_content.elevator
+        
+        # Create deterministic creatures from validated spawn candidates.
+        reserved_tiles = {generated_floor.player_spawn, generated_floor.elevator_tile}
+        reserved_tiles.update(pickup.tile for pickup in self.material_pickups)
+        reserved_tiles.update(door.tile for door in self.doors)
+        valid_spawns = [
+            tile
+            for tile in generated_floor.candidate_creature_spawns
+            if tile not in reserved_tiles
+        ]
+        desired_count = 1 if generated_floor.floor_number == 1 else 2
+        self.creatures = []
+        for index, spawn_tile in enumerate(valid_spawns[:desired_count]):
+            creature_seed = (
+                generated_floor.attempt_seed
+                + generated_floor.floor_number * 1_000_003
+                + index * 97_409
+            )
+            creature_rng = random.Random(creature_seed)
+            creature = Creature(
+                f"f{generated_floor.floor_number}-a{generated_floor.generation_attempt}-creature-{index:02d}",
+                spawn_tile,
+                self.assets,
+                settings.TILE_SIZE,
+                creature_rng,
+            )
+            self.creatures.append(creature)
+        self.creatures_rng = random.Random(generated_floor.attempt_seed)
+
         self.scan_system.reset()
         self.snapshot_system.reset()
 
@@ -659,6 +750,43 @@ class Game:
             self.scan_renderer.render(self.screen, self.scan_system, self.camera)
             self.snapshot_renderer.render(self.screen, self.snapshot_system.snapshots, self.camera)
             self.screen.blit(self.player.image, player_screen_rect)
+            
+            # Real creatures are visible only in F2 debug mode.
+            active_scan_id = self.scan_system.active_wave.scan_id if self.scan_system.active_wave else None
+            processed_ids = (
+                self.snapshot_system.processed_ids_for_scan(active_scan_id)
+                if active_scan_id is not None
+                else frozenset()
+            )
+            for creature in self.creatures:
+                creature_screen_rect = self.camera.world_rect_to_screen(creature.visual_rect)
+                self.screen.blit(creature.image, creature_screen_rect)
+                pygame.draw.rect(
+                    self.screen,
+                    (255, 0, 255),
+                    self.camera.world_rect_to_screen(creature.collision_rect),
+                    1,
+                )
+                if creature.patrol_target is not None:
+                    target_world = pygame.Vector2(
+                        (creature.patrol_target[0] + 0.5) * settings.TILE_SIZE,
+                        (creature.patrol_target[1] + 0.5) * settings.TILE_SIZE,
+                    )
+                    pygame.draw.line(
+                        self.screen,
+                        (255, 170, 40),
+                        creature_screen_rect.center,
+                        self.camera.world_to_screen(target_world),
+                        1,
+                    )
+                label = self.fonts["small"].render(
+                    f"{creature.unique_id} tile={creature.current_tile} "
+                    f"target={creature.patrol_target} processed={creature.unique_id in processed_ids}",
+                    True,
+                    (255, 170, 40),
+                )
+                self.screen.blit(label, (creature_screen_rect.left, creature_screen_rect.top - 18))
+            
             draw_camera_debug_overlay(
                 self.screen,
                 generated_floor,
@@ -678,7 +806,7 @@ class Game:
                     f"Attempt {generated_floor.generation_attempt} | Attempt seed {generated_floor.attempt_seed}",
                     f"Validation {'OK' if report.is_valid else 'FAILED'} | Cycle rank {report.graph_cycle_rank}",
                     f"Connectivity {report.connectivity_ratio:0.3f} | Doors {len(self.doors)} | Power {self.floor_power_available}",
-                    f"Materials {len([p for p in self.material_pickups if p.scan_active])} | Echo snapshots {len(self.snapshot_system.snapshots)}",
+                    f"Materials {len([p for p in self.material_pickups if p.scan_active])} | Creatures {len(self.creatures)} | Echo snapshots {len(self.snapshot_system.snapshots)}",
                     "F6 nearest door | F7 nearest locked door | F8 power",
                 ]
                 self.draw_text_lines(debug_lines, 16, 112, 24)
@@ -718,8 +846,21 @@ class Game:
         floor = run.floor if run is not None else 1
         score = run.score if run is not None else 0
         seed = run.seed if run is not None else self.next_seed
+        elapsed = run.elapsed_time if run is not None else 0.0
         self.draw_centered_text("SIGNAL LOST", "title", settings.COLOR_WARNING, 160)
-        self.draw_centered_text(f"Floor {floor} | Score {score} | Seed {seed}", "body", settings.COLOR_TEXT_MUTED, 245)
+        self.draw_centered_text(
+            f"Floor {floor} | Time {elapsed:0.1f}s | Score {score} | Seed {seed}",
+            "body",
+            settings.COLOR_TEXT_MUTED,
+            245,
+        )
+        if self.death_creature_id:
+            self.draw_centered_text(
+                f"Contact: {self.death_creature_id}",
+                "small",
+                settings.COLOR_WARNING,
+                292,
+            )
         self.draw_button_group(GameState.DEATH)
 
     def render_victory(self) -> None:
@@ -816,6 +957,14 @@ class Game:
             f"object echoes {len(self.snapshot_system.snapshots)} | evaluated {self.snapshot_system.diagnostics.evaluated_entities}",
             f"raycast {diagnostics.last_raycast_ms:0.2f} ms | max {diagnostics.max_raycast_ms:0.2f} ms",
             f"dynamic doors {diagnostics.last_dynamic_door_count}",
+            (
+                f"creatures {len(self.creatures)} | creature echoes "
+                f"{self.snapshot_system.snapshot_count_for_category('creature')}"
+            ),
+            (
+                f"processed current scan "
+                f"{len(self.snapshot_system.processed_ids_for_scan(wave.scan_id)) if wave else 0}"
+            ),
         ]
         font = self.fonts["small"]
         width = 390

@@ -2,7 +2,7 @@
 
 Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is currently complete through Phase 8. It contains the application shell, state system, cached asset pipeline, seeded and validated procedural floors, player movement, camera and collisions, dynamic doors, fixed-origin DDA scan occlusion, fading static traces, generic object echoes, deterministic material pickups, elevator scan states, score/material counters, tests and headless preview tools. Moving creatures, AI, floor objectives, crafting and active modules are later phases.
+This repository is currently complete through Phase 9. It contains the application shell, state system, cached asset pipeline, seeded and validated procedural floors, player movement, camera and collisions, dynamic doors, fixed-origin DDA scan occlusion, fading static traces, generic object echoes, moving invisible creatures, deterministic material pickups, elevator scan states, death/restart flow, score/material counters, tests and headless preview tools. Objectives, crafting and active modules are later phases.
 
 ## Setup
 
@@ -247,5 +247,30 @@ Create deterministic object-echo screenshots with:
 python tools/snapshot_preview.py --seed 12345 --floor 1 --headless
 ```
 
-The tool saves detected, collected, fading and expired snapshots under `artifacts/`, so this system can be checked without searching manually through a random floor.
+Create deterministic creature echo screenshots with:
 
+```powershell
+python tools/creature_preview.py --seed 12345 --floor 1 --headless
+```
+
+The tools save detected, collected, fading and expired snapshots under `artifacts/`, so these systems can be checked without searching manually through a random floor.
+
+
+## Invisible Creatures And Dynamic Echoes
+
+Phase 9 adds moving creatures that are physically present and lethal but are never rendered during normal play. Their simple patrol paths are deterministic for the run seed and are recalculated only when a waypoint changes or a path becomes blocked. Walls, obstacles and closed doors block their movement. Full threat-aware pursuit is implemented in Phase 10.
+
+A creature is not part of the static 720-ray result. During every active scan, the dynamic echo system compares the previous/current wave radius with the creature's previous/current radial distance. When the moving creature and the expanding front intersect, the game performs the same line-of-sight check used by scan raycasting. Walls, pillars, corners and closed doors prevent capture.
+
+A successful detection creates a copied cyan outline at the exact position, facing and animation frame from that instant. The echo remains stationary for about 1.5 seconds while the real creature continues moving invisibly. Each creature can create at most one echo per scan; a later scan may reveal its new position.
+
+Touching a creature immediately ends the one-life run. The death screen displays floor, elapsed time, score and seed. `Retry Same Seed` reconstructs the same procedural floor and deterministic creature spawn, while `New Run` chooses a new seed. Both routes clear old creatures, scan fronts, traces and snapshots.
+
+Debug and preview:
+
+```powershell
+python tools/creature_preview.py --seed 12345 --floor 1
+python tools/creature_preview.py --seed 12345 --floor 1 --headless
+```
+
+F2 reveals the real creature, its collision Rect and patrol target. F3 adds creature and creature-echo counters. Headless preview output includes debug, before-scan, snapshot, moved-creature and death screenshots in `artifacts/`.

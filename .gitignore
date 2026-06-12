@@ -17,3 +17,6 @@ dist/
 artifacts/
 
 workshop26.zip
+
+# Local editor settings
+.vscode/
