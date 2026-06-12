@@ -133,4 +133,13 @@ Static geometry is raycast once when Space is pressed, never every frame. The ac
 - Current line of sight always uses `game/systems/raycasting.py` and the authoritative `DynamicBlockerRegistry`.
 - `Game.update_gameplay` updates doors with player and creature occupancy, moves creatures, moves the player, checks contact at safe points, then advances scans and captures echoes.
 - Normal rendering excludes real creatures. F2 is the only world view that renders them directly; normal play receives copied snapshots only.
-- Phase 10 will layer threat events and AI states over this stable movement/snapshot foundation rather than replacing it.
+- Phase 10 layers threat events and AI states over this stable movement/snapshot foundation rather than replacing it.
+
+## Phase 10 Creature AI Architecture Notes
+
+- `game/systems/threat_events.py` owns temporary sound/disturbance events. It supports all planned source types, but only `PLAYER_SCAN` currently creates active gameplay events.
+- `game/systems/creature_ai.py` owns the `CreatureState` enum, state transitions, timers, selected threat, patrol/investigation/search/chase targets, last-known player memory, stun state, perception cadence and pathfinding diagnostics.
+- `game/world/navigation.py` now contains deterministic four-directional A* helpers that respect static floor walkability and `DynamicBlockerRegistry` door semantics.
+- `Creature` remains responsible for physical position, animation, collision Rects, bounded movement and scan outlines. It delegates decision-making only when an AI object is attached.
+- `Game` owns one shared `ThreatEventSystem`, creates per-creature deterministic AI instances during floor preparation, emits exactly one `PLAYER_SCAN` event after a successful fixed-origin scan, and clears AI/threat state on retry, new run, main menu and floor cleanup.
+- F2 and F3 read existing AI diagnostics. They do not perform extra pathfinding or alter gameplay state.

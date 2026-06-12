@@ -15,6 +15,7 @@ from game import settings
 from game.app import Game
 from game.entities.door import DoorState, DoorType, DynamicDoor
 from game.states import GameState
+from game.systems.creature_ai import CreatureState
 from game.systems.raycasting import has_line_of_sight
 from game.world import collision
 from game.world.blockers import BlockerPurpose
@@ -90,6 +91,49 @@ def find_scan_tile_for_creature(game: Game, creature) -> tuple[int, int]:
         ):
             return tile
     raise AssertionError("Could not find a visible scan tile for the creature.")
+
+
+def find_visible_tile_for_creature(game: Game, creature) -> tuple[int, int]:
+    require(game.placeholder_run is not None, "Run was not created.")
+    floor = game.placeholder_run.generated_floor
+    require(floor is not None, "Floor was not generated.")
+    candidates: list[tuple[float, tuple[int, int]]] = []
+    for tile in floor.walkable_tiles():
+        if tile == creature.current_tile:
+            continue
+        world = pygame.Vector2(
+            (tile[0] + 0.5) * settings.TILE_SIZE,
+            (tile[1] + 0.5) * settings.TILE_SIZE,
+        )
+        distance = world.distance_to(creature.world_position)
+        if not (settings.TILE_SIZE * 2.0 <= distance <= settings.CREATURE_DETECTION_DISTANCE * 0.8):
+            continue
+        if has_line_of_sight(world, creature.world_position, floor, game.dynamic_blockers, settings.TILE_SIZE):
+            candidates.append((distance, tile))
+    if not candidates:
+        raise AssertionError("Could not find direct visible tile for creature AI.")
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
+def find_hidden_tile_for_creature(game: Game, creature) -> tuple[int, int]:
+    require(game.placeholder_run is not None, "Run was not created.")
+    floor = game.placeholder_run.generated_floor
+    require(floor is not None, "Floor was not generated.")
+    candidates: list[tuple[float, tuple[int, int]]] = []
+    for tile in floor.walkable_tiles():
+        world = pygame.Vector2(
+            (tile[0] + 0.5) * settings.TILE_SIZE,
+            (tile[1] + 0.5) * settings.TILE_SIZE,
+        )
+        distance = world.distance_to(creature.world_position)
+        if distance <= settings.CREATURE_DETECTION_DISTANCE + settings.TILE_SIZE:
+            continue
+        candidates.append((distance, tile))
+    if not candidates:
+        raise AssertionError("Could not find hidden tile outside creature perception range.")
+    candidates.sort(reverse=True)
+    return candidates[0][1]
 
 
 def find_powered_door(game: Game) -> DynamicDoor:
@@ -267,6 +311,66 @@ def main() -> int:
         require(game.placeholder_run is not None and game.placeholder_run.restart_count == 1, "Retry same seed did not increment restart count.")
         require(game.creatures, "Creature was not recreated after retry.")
         require(game.snapshot_system.snapshots == [], "Retry retained creature snapshots.")
+
+        creature = game.creatures[0]
+        ai = creature.ai
+        require(ai is not None, "Creature AI was not attached after retry.")
+        require(ai.state is CreatureState.PATROL, "Creature did not begin in PATROL.")
+        step_gameplay(game, pygame.Vector2(0, 0), frames=8)
+        require(ai.current_patrol_target is not None, "PATROL did not choose a target.")
+        patrol_calls = ai.pathfinding_call_count
+        step_gameplay(game, pygame.Vector2(0, 0), frames=5)
+        require(ai.pathfinding_call_count == patrol_calls, "PATROL recalculated A* every frame.")
+
+        scan_tile = find_scan_tile_for_creature(game, creature)
+        place_player_at(game, scan_tile)
+        while not game.scan_system.ready:
+            game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
+        scan_origin = game.player.world_position.copy()
+        require(game.trigger_scan(), "AI threat scan did not trigger.")
+        require(len(game.threat_events.active_events) == 1, "Player scan did not create exactly one threat event.")
+        require(
+            game.threat_events.active_events[0].world_position == scan_origin,
+            "Threat event did not use the fixed scan origin.",
+        )
+        place_player_at(game, find_hidden_tile_for_creature(game, creature))
+        advance_until(game, lambda: ai.state is CreatureState.INVESTIGATE, frames=90)
+        require(ai.investigation_target_tile == scan_tile, "AI did not investigate the scan origin tile.")
+
+        creature.place_at_tile(ai.investigation_target_tile)
+        game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
+        require(ai.state is CreatureState.SEARCH, "AI did not enter SEARCH after reaching investigation point.")
+
+        visible_tile = find_visible_tile_for_creature(game, creature)
+        place_player_at(game, visible_tile)
+        advance_until(game, lambda: ai.state is CreatureState.CHASE, frames=90)
+        require(ai.last_known_player_tile == visible_tile, "CHASE did not record the visible player tile.")
+        remembered_position = ai.last_known_player_position.copy()
+        place_player_at(game, find_hidden_tile_for_creature(game, creature))
+        step_gameplay(game, pygame.Vector2(0, 0), frames=30)
+        require(ai.last_known_player_position == remembered_position, "Last-known player position changed without LOS.")
+
+        ai.apply_stun(0.6)
+        require(ai.state is CreatureState.STUNNED, "Direct stun API did not enter STUNNED.")
+        stun_remaining = ai.stun_timer
+        game.transition_to(GameState.PAUSED)
+        game.update(0.5)
+        require(ai.stun_timer == stun_remaining, "Stun timer advanced while paused.")
+        game.transition_to(GameState.PLAYING)
+        advance_until(game, lambda: ai.state is not CreatureState.STUNNED, frames=90)
+
+        game.player.world_position = creature.world_position.copy()
+        game.player._sync_rects_from_world()
+        game.camera.update(game.player.world_position)
+        game.update_gameplay(0.0, pygame.Vector2())
+        require(game.state == GameState.DEATH, "Contact after AI checks did not trigger death.")
+        game.retry_same_seed()
+        require(game.state == GameState.PLAYING, "Retry after AI death did not return to PLAYING.")
+        require(len(game.threat_events.active_events) == 0, "Retry retained active AI threat events.")
+        require(game.creatures and game.creatures[0].ai is not ai, "Retry reused old AI object.")
+        require(game.creatures[0].ai.state is CreatureState.PATROL, "Retry did not reset AI state to PATROL.")
+        require(game.creatures[0].ai.selected_threat_event_id is None, "Retry retained selected threat ID.")
+        require(game.creatures[0].ai.last_known_player_position is None, "Retry retained AI player memory.")
 
         door = find_powered_door(game)
         place_player_at(game, approach_tile_for_door(game, door))

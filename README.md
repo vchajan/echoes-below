@@ -2,7 +2,7 @@
 
 Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is currently complete through Phase 9. It contains the application shell, state system, cached asset pipeline, seeded and validated procedural floors, player movement, camera and collisions, dynamic doors, fixed-origin DDA scan occlusion, fading static traces, generic object echoes, moving invisible creatures, deterministic material pickups, elevator scan states, death/restart flow, score/material counters, tests and headless preview tools. Objectives, crafting and active modules are later phases.
+This repository is currently complete through Phase 10. It contains the application shell, state system, cached asset pipeline, seeded and validated procedural floors, player movement, camera and collisions, dynamic doors, fixed-origin DDA scan occlusion, fading static traces, generic object echoes, moving invisible creatures, threat-aware creature AI, deterministic material pickups, elevator scan states, death/restart flow, score/material counters, tests and headless preview tools. Objectives, crafting and active modules are later phases.
 
 ## Setup
 
@@ -31,6 +31,7 @@ python main.py
 - Escape: skip splash, pause during PLAYING, resume from pause or return from How to Play
 - Backspace: return from How to Play
 - F2: toggle the camera-space debug overlay during PLAYING
+- F3: toggle scan, snapshot and AI diagnostics during PLAYING
 - F6/F7/F8: door debug controls, only while F2 debug mode is active
 
 Planned gameplay controls:
@@ -57,11 +58,14 @@ python tools/generation_preview.py --seed 12345 --floor 2 --headless
 python tools/generation_preview.py --seed 12345 --floor 3 --headless
 python tools/player_preview.py --seed 12345 --headless
 python tools/door_preview.py --seed 12345 --floor 2 --headless
+python tools/snapshot_preview.py --seed 12345 --floor 1 --headless
+python tools/creature_preview.py --seed 12345 --floor 1 --headless
+python tools/ai_preview.py --seed 12345 --floor 1 --headless
 python -m py_compile main.py
 python -c "import main; print('main import ok')"
 ```
 
-Gameplay systems such as scan raycasting, creatures, objectives, materials and crafting are implemented in later phases.
+Floor objectives, crafting, active modules and final HUD scoring remain later phases.
 
 ## Assets
 
@@ -258,7 +262,7 @@ The tools save detected, collected, fading and expired snapshots under `artifact
 
 ## Invisible Creatures And Dynamic Echoes
 
-Phase 9 adds moving creatures that are physically present and lethal but are never rendered during normal play. Their simple patrol paths are deterministic for the run seed and are recalculated only when a waypoint changes or a path becomes blocked. Walls, obstacles and closed doors block their movement. Full threat-aware pursuit is implemented in Phase 10.
+Phase 9 added moving creatures that are physically present and lethal but are never rendered during normal play. Walls, obstacles and closed doors block their movement. Phase 10 replaces the simple patrol-only behaviour in active runs with a threat-aware AI state machine while preserving the same physical creature body, collision and snapshot contract.
 
 A creature is not part of the static 720-ray result. During every active scan, the dynamic echo system compares the previous/current wave radius with the creature's previous/current radial distance. When the moving creature and the expanding front intersect, the game performs the same line-of-sight check used by scan raycasting. Walls, pillars, corners and closed doors prevent capture.
 
@@ -273,4 +277,35 @@ python tools/creature_preview.py --seed 12345 --floor 1
 python tools/creature_preview.py --seed 12345 --floor 1 --headless
 ```
 
-F2 reveals the real creature, its collision Rect and patrol target. F3 adds creature and creature-echo counters. Headless preview output includes debug, before-scan, snapshot, moved-creature and death screenshots in `artifacts/`.
+F2 reveals the real creature, its collision Rect and AI target/path information. F3 adds creature, creature-echo and AI counters. Headless preview output includes debug, before-scan, snapshot, moved-creature and death screenshots in `artifacts/`.
+
+## Creature AI, Threat Events And Pathfinding
+
+Phase 10 adds the authoritative creature states `PATROL`, `INVESTIGATE`, `SEARCH`, `CHASE` and `STUNNED` in `game/systems/creature_ai.py`.
+
+- `PATROL`: default invisible movement. Each creature chooses deterministic reachable patrol targets and reuses paths instead of recalculating every frame.
+- `INVESTIGATE`: entered when a relevant shared threat event is selected. A player scan creates exactly one `PLAYER_SCAN` threat at the fixed scan origin, not one event per ray or trace.
+- `SEARCH`: uncertainty around an investigated point or last known player position. The creature samples nearby valid search points for a limited duration, then returns to patrol.
+- `CHASE`: entered only through direct perception: the player must be within detection range and line of sight must pass through the same wall, corner and dynamic-door blocker rules as scan raycasting. If sight is lost, the creature follows the last known player position briefly, then searches.
+- `STUNNED`: implemented as an API preparation state for later Shock Pulse gameplay. Direct calls such as `creature.stun(duration)` stop movement and preserve collision danger, but no module input or inventory is implemented yet.
+
+Threat events are stored in `ThreatEventSystem`. The source types are `PLAYER_SCAN`, `GENERATOR`, `RELAY`, `ECHO_CORE`, `SHOCK_PULSE`, `DECOY_BEACON` and `SCAN_PROJECTOR`; only `PLAYER_SCAN` currently creates gameplay events. Relevance uses a simple strength, age-decay and distance formula with hearing-radius filtering and hysteresis so creatures do not switch targets for tiny differences.
+
+Tile navigation lives in `game/world/navigation.py` and uses deterministic four-way A*. It respects map bounds, walls, obstacles, pillars and the existing dynamic door blocker registry. Closed, locked and wedged-closed doors block paths and line of sight; open and wedged-open doors allow them. Each AI stores pathfinding timers and counters so A* is not run every frame.
+
+Debug and preview:
+
+```powershell
+python tools/ai_preview.py --seed 12345 --floor 1
+python tools/ai_preview.py --seed 12345 --floor 1 --headless
+```
+
+Headless AI preview saves:
+
+- `artifacts/ai_preview_12345_floor1_patrol.png`
+- `artifacts/ai_preview_12345_floor1_investigate.png`
+- `artifacts/ai_preview_12345_floor1_search.png`
+- `artifacts/ai_preview_12345_floor1_chase.png`
+- `artifacts/ai_preview_12345_floor1_stunned.png`
+
+F2 now draws creature state, previous state, transition reason, current target, path tiles, selected threat, search centre, last known player marker and recent line-of-sight result. F3 reports state counts, active threat counts, threat source counts, pathfinding calls per second, path timing, active path nodes, perception checks per second and stunned creature count.

@@ -11,8 +11,10 @@ from game.entities.door import DoorType, DynamicDoor
 from game.entities.scan_objects import ElevatorEntity, MaterialPickup
 from game.entities.player import Player, movement_direction_from_bools
 from game import settings
+from game.systems.creature_ai import CreatureAI, CreatureState
 from game.systems.scan import ScanRenderer, ScanSystem
 from game.systems.snapshots import EchoSnapshotRenderer, EchoSnapshotSystem
+from game.systems.threat_events import ThreatEventSystem
 from game.states import GameState, PlaceholderRun
 from game.ui.buttons import Button
 from game.world.blockers import DynamicBlockerRegistry
@@ -48,6 +50,7 @@ class Game:
         self.darkness_surface = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
         self.local_glow_surface = build_local_glow_surface(settings.LOCAL_VISIBILITY_RADIUS)
         self.scan_system = ScanSystem()
+        self.threat_events = ThreatEventSystem()
         self.scan_renderer = ScanRenderer(settings.WINDOW_SIZE)
         self.snapshot_system = EchoSnapshotSystem()
         self.snapshot_renderer = EchoSnapshotRenderer()
@@ -320,6 +323,7 @@ class Game:
                 self.floor_world_surface = None
                 self.floor_preview_surface = None
                 self.scan_system.reset()
+                self.threat_events.reset()
             self.transition_to(GameState.FLOOR_TRANSITION)
         elif action == "retry_seed":
             self.retry_same_seed()
@@ -367,6 +371,11 @@ class Game:
         if direction.length_squared() > 1:
             direction = direction.normalize()
 
+        self.player.update(direction, dt, self.placeholder_run.generated_floor, self.dynamic_blockers)
+        if self._player_touches_creature():
+            self._enter_death_state()
+            return
+
         creature_rects = [creature.collision_rect for creature in self.creatures]
         for door in self.doors:
             door.update(
@@ -378,16 +387,28 @@ class Game:
         if self.floor_content is not None:
             self.floor_content.update(dt)
 
+        self.threat_events.update(dt)
         for creature in self.creatures:
-            creature.update(dt, self.placeholder_run.generated_floor, self.dynamic_blockers)
+            creature.update(
+                dt,
+                self.placeholder_run.generated_floor,
+                self.dynamic_blockers,
+                player=self.player,
+                threat_events=self.threat_events,
+                session_time=self.placeholder_run.elapsed_time,
+            )
         if self._player_touches_creature():
             self._enter_death_state()
             return
 
-        self.player.update(direction, dt, self.placeholder_run.generated_floor, self.dynamic_blockers)
-        if self._player_touches_creature():
-            self._enter_death_state()
-            return
+        creature_rects = [creature.collision_rect for creature in self.creatures]
+        for door in self.doors:
+            door.update(
+                0.0,
+                self.player.collision_rect,
+                other_entity_rects=creature_rects,
+                floor_powered=self.floor_power_available,
+            )
 
         self.camera.update(self.player.world_position, dt)
         self.scan_system.update(dt)
@@ -451,13 +472,21 @@ class Game:
             or self.player is None
         ):
             return False
-        return self.scan_system.trigger(
+        triggered = self.scan_system.trigger(
             self.player.world_position,
             self.placeholder_run.generated_floor,
             self.dynamic_blockers,
             settings.TILE_SIZE,
             session_time=self.placeholder_run.elapsed_time,
         )
+        if triggered and self.scan_system.active_wave is not None:
+            self.threat_events.add_player_scan(
+                self.scan_system.active_wave.origin,
+                creation_time=self.placeholder_run.elapsed_time,
+                floor_number=self.placeholder_run.floor,
+                scan_id=self.scan_system.active_wave.scan_id,
+            )
+        return triggered
 
     def transition_to(self, new_state: GameState) -> None:
         self.previous_state = self.state
@@ -516,6 +545,7 @@ class Game:
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
         self.generation_error = None
         self.scan_system.reset()
+        self.threat_events.reset()
         self.snapshot_system.reset()
         self.world_renderer.clear()
 
@@ -524,6 +554,7 @@ class Game:
 
     def prepare_generated_floor(self) -> None:
         self.scan_system.reset()
+        self.threat_events.reset()
         self.snapshot_system.reset()
         if self.placeholder_run is None:
             return
@@ -546,6 +577,7 @@ class Game:
             self.creatures_rng = None
             self.floor_world_surface = None
             self.floor_preview_surface = None
+            self.threat_events.reset()
             return
 
         self.generation_error = None
@@ -594,10 +626,18 @@ class Game:
                 settings.TILE_SIZE,
                 creature_rng,
             )
+            ai_seed = creature_seed + 51_337
+            creature.ai = CreatureAI(
+                creature,
+                random.Random(ai_seed),
+                floor_number=generated_floor.floor_number,
+                creature_index=index,
+            )
             self.creatures.append(creature)
         self.creatures_rng = random.Random(generated_floor.attempt_seed)
 
         self.scan_system.reset()
+        self.threat_events.reset()
         self.snapshot_system.reset()
 
     def nearest_door(self, door_type: DoorType | None = None) -> DynamicDoor | None:
@@ -767,6 +807,41 @@ class Game:
                     self.camera.world_rect_to_screen(creature.collision_rect),
                     1,
                 )
+                ai = creature.ai
+                path_tiles = ai.current_path if ai is not None else creature.current_path
+                for tile in path_tiles[:60]:
+                    tile_rect = pygame.Rect(
+                        tile[0] * settings.TILE_SIZE + settings.TILE_SIZE // 3,
+                        tile[1] * settings.TILE_SIZE + settings.TILE_SIZE // 3,
+                        settings.TILE_SIZE // 3,
+                        settings.TILE_SIZE // 3,
+                    )
+                    pygame.draw.rect(
+                        self.screen,
+                        (255, 170, 40),
+                        self.camera.world_rect_to_screen(tile_rect),
+                        1,
+                    )
+                if ai is not None and ai.current_target_tile is not None:
+                    target_world = pygame.Vector2(
+                        (ai.current_target_tile[0] + 0.5) * settings.TILE_SIZE,
+                        (ai.current_target_tile[1] + 0.5) * settings.TILE_SIZE,
+                    )
+                    pygame.draw.circle(
+                        self.screen,
+                        (255, 220, 80),
+                        self.camera.world_to_screen(target_world),
+                        6,
+                        1,
+                    )
+                if ai is not None and ai.last_known_player_position is not None:
+                    pygame.draw.circle(
+                        self.screen,
+                        (255, 80, 80),
+                        self.camera.world_to_screen(ai.last_known_player_position),
+                        8,
+                        1,
+                    )
                 if creature.patrol_target is not None:
                     target_world = pygame.Vector2(
                         (creature.patrol_target[0] + 0.5) * settings.TILE_SIZE,
@@ -779,13 +854,33 @@ class Game:
                         self.camera.world_to_screen(target_world),
                         1,
                     )
-                label = self.fonts["small"].render(
-                    f"{creature.unique_id} tile={creature.current_tile} "
-                    f"target={creature.patrol_target} processed={creature.unique_id in processed_ids}",
-                    True,
-                    (255, 170, 40),
-                )
-                self.screen.blit(label, (creature_screen_rect.left, creature_screen_rect.top - 18))
+                if ai is None:
+                    labels = [
+                        f"{creature.unique_id} tile={creature.current_tile} target={creature.patrol_target}",
+                    ]
+                else:
+                    labels = [
+                        (
+                            f"{creature.unique_id} {ai.state.name} prev={ai.previous_state.name} "
+                            f"reason={ai.transition_reason}"
+                        ),
+                        (
+                            f"tile={creature.current_tile} target={ai.current_target_tile} "
+                            f"path={len(ai.current_path)} threat={ai.selected_threat_event_id}"
+                        ),
+                        (
+                            f"patrol={ai.current_patrol_target} investigate={ai.investigation_target_tile} "
+                            f"search={ai.search_centre_tile}"
+                        ),
+                        (
+                            f"last_player={ai.last_known_player_tile} stun={ai.stun_timer:0.1f} "
+                            f"LOS={ai.last_los_result} range={settings.CREATURE_DETECTION_DISTANCE / settings.TILE_SIZE:0.1f}t"
+                        ),
+                        f"processed={creature.unique_id in processed_ids}",
+                    ]
+                for line_index, text in enumerate(labels):
+                    label = self.fonts["small"].render(text, True, (255, 170, 40))
+                    self.screen.blit(label, (creature_screen_rect.left, creature_screen_rect.top - 18 - line_index * 18))
             
             draw_camera_debug_overlay(
                 self.screen,
@@ -948,6 +1043,7 @@ class Game:
     def draw_performance_overlay(self) -> None:
         wave = self.scan_system.active_wave
         diagnostics = self.scan_system.diagnostics
+        ai_stats = self.ai_diagnostics()
         fps = self.clock.get_fps()
         lines = [
             f"FPS {fps:0.1f} | frame {self.last_frame_dt * 1000.0:0.2f} ms",
@@ -965,6 +1061,19 @@ class Game:
                 f"processed current scan "
                 f"{len(self.snapshot_system.processed_ids_for_scan(wave.scan_id)) if wave else 0}"
             ),
+            (
+                f"AI states {ai_stats['state_counts']} | threats {ai_stats['active_threats']} "
+                f"{ai_stats['threat_source_counts']}"
+            ),
+            (
+                f"A* calls {ai_stats['pathfinding_calls']} "
+                f"({ai_stats['pathfinding_calls_per_second']:0.2f}/s) | nodes {ai_stats['active_path_nodes']}"
+            ),
+            (
+                f"A* last {ai_stats['last_pathfinding_ms']:0.3f} ms max {ai_stats['max_pathfinding_ms']:0.3f} ms | "
+                f"perception {ai_stats['perception_checks_per_second']:0.2f}/s"
+            ),
+            f"stunned {ai_stats['stunned_creatures']} | active path target count {ai_stats['creatures_with_paths']}",
         ]
         font = self.fonts["small"]
         width = 390
@@ -976,6 +1085,46 @@ class Game:
         self.screen.blit(self.overlay_surface, (0, 0))
         for index, line in enumerate(lines):
             self.screen.blit(font.render(line, True, settings.COLOR_TEXT_MUTED), (panel.left + 12, panel.top + 10 + index * 23))
+
+    def ai_diagnostics(self) -> dict[str, object]:
+        elapsed = 1.0
+        if self.placeholder_run is not None:
+            elapsed = max(1.0, self.placeholder_run.elapsed_time)
+        state_counts = {state.name: 0 for state in CreatureState}
+        pathfinding_calls = 0
+        perception_checks = 0
+        active_path_nodes = 0
+        stunned_creatures = 0
+        creatures_with_paths = 0
+        last_pathfinding_ms = 0.0
+        max_pathfinding_ms = 0.0
+        for creature in self.creatures:
+            ai = creature.ai
+            if ai is None:
+                continue
+            state_counts[ai.state.name] += 1
+            pathfinding_calls += ai.pathfinding_call_count
+            perception_checks += ai.perception_check_count
+            active_path_nodes += len(ai.current_path)
+            if ai.current_path:
+                creatures_with_paths += 1
+            if ai.state is CreatureState.STUNNED:
+                stunned_creatures += 1
+            last_pathfinding_ms = max(last_pathfinding_ms, ai.last_pathfinding_ms)
+            max_pathfinding_ms = max(max_pathfinding_ms, ai.max_pathfinding_ms)
+        return {
+            "state_counts": {key: value for key, value in state_counts.items() if value},
+            "active_threats": len(self.threat_events.active_events),
+            "threat_source_counts": self.threat_events.source_counts(),
+            "pathfinding_calls": pathfinding_calls,
+            "pathfinding_calls_per_second": pathfinding_calls / elapsed,
+            "last_pathfinding_ms": last_pathfinding_ms,
+            "max_pathfinding_ms": max_pathfinding_ms,
+            "perception_checks_per_second": perception_checks / elapsed,
+            "active_path_nodes": active_path_nodes,
+            "stunned_creatures": stunned_creatures,
+            "creatures_with_paths": creatures_with_paths,
+        }
 
     def draw_button_group(self, state: GameState) -> None:
         group = self.buttons.get(state, [])
