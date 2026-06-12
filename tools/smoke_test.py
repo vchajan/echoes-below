@@ -18,6 +18,7 @@ from game.entities.objectives import ContainmentControlState, RelayState
 from game.entities.scan_objects import ElevatorState
 from game.states import GameState
 from game.systems.creature_ai import CreatureState
+from game.systems.modules import ModuleType
 from game.systems.threat_events import ThreatSourceType
 from game.systems.raycasting import has_line_of_sight
 from game.world import collision
@@ -687,9 +688,32 @@ def main() -> int:
             "Floor 1 completion score rewards were not applied.",
         )
         floor1_score = game.placeholder_run.score
+        game.placeholder_run.material_counts = {"scrap": 3, "circuit": 3, "power_cell": 3}
+        game.workshop_system.selected_index = 0
+        game.workshop_system.select_slot(0)
+        game.activate_workshop_selection()
+        game.workshop_system.selected_index = 1
+        game.workshop_system.select_slot(1)
+        game.activate_workshop_selection()
+        require(
+            game.placeholder_run.module_loadout.is_crafted(ModuleType.SHOCK_PULSE),
+            "Workshop did not craft Shock Pulse.",
+        )
+        require(
+            game.placeholder_run.module_loadout.is_crafted(ModuleType.DECOY_BEACON),
+            "Workshop did not craft Decoy Beacon.",
+        )
+        require(
+            game.placeholder_run.module_loadout.equipped_slots
+            == [ModuleType.SHOCK_PULSE.value, ModuleType.DECOY_BEACON.value],
+            "Workshop did not preserve the two equipped slots.",
+        )
+        require(game.placeholder_run.score == floor1_score, "Crafting changed score.")
         floor1_materials = dict(game.placeholder_run.material_counts)
+        floor1_modules = game.placeholder_run.module_loadout.snapshot()
 
-        game.perform_action("continue_floor")
+        game.workshop_system.selected_index = game.workshop_system.CONTINUE_INDEX
+        game.activate_workshop_selection()
         require(game.state is GameState.FLOOR_TRANSITION, "Continue did not begin Floor 2 transition.")
         require(game.placeholder_run.floor == 2, "Continue did not set the run floor to Floor 2.")
         game.update(settings.FLOOR_TRANSITION_DURATION + 0.1)
@@ -698,6 +722,10 @@ def main() -> int:
         require(game.placeholder_run.generated_floor.floor_number == 2, "Generated floor number was not 2.")
         require(game.placeholder_run.score == floor1_score, "Floor 2 transition did not preserve score.")
         require(game.placeholder_run.material_counts == floor1_materials, "Floor 2 transition did not preserve materials.")
+        require(
+            game.placeholder_run.module_loadout.snapshot() == floor1_modules,
+            "Floor 2 transition did not preserve crafted/equipped modules.",
+        )
         require(game.placeholder_run.completed_floor_count == 1, "Floor 1 completion count was not preserved.")
         require(game.floor_objectives is not None, "Floor 2 objectives were not created.")
         require(game.floor_objectives.state.floor_number == 2, "Floor 2 objective state was not active.")
@@ -714,8 +742,13 @@ def main() -> int:
 
         freeze_creatures(game)
         complete_floor2_objective(game)
+        require(
+            game.placeholder_run.module_loadout.snapshot() == floor1_modules,
+            "Floor 2 completion did not preserve module loadout into workshop.",
+        )
 
-        game.perform_action("continue_floor")
+        game.workshop_system.selected_index = game.workshop_system.CONTINUE_INDEX
+        game.activate_workshop_selection()
         require(game.state is GameState.FLOOR_TRANSITION, "Continue did not begin Floor 3 transition.")
         require(game.placeholder_run.floor == 3, "Continue did not set the run floor to Floor 3.")
         game.update(settings.FLOOR_TRANSITION_DURATION + 0.1)

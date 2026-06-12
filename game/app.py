@@ -12,6 +12,8 @@ from game.entities.scan_objects import ElevatorEntity, MaterialPickup
 from game.entities.player import Player, movement_direction_from_bools
 from game import settings
 from game.systems.creature_ai import CreatureAI, CreatureState
+from game.systems.crafting import WorkshopAction, WorkshopSystem
+from game.systems.modules import MODULE_BY_VALUE, MODULE_DEFINITIONS
 from game.systems.floor_objectives import Floor1ObjectiveSystem, Floor2ObjectiveSystem
 from game.systems.floor3_objectives import Floor3ObjectiveSystem
 from game.systems.scan import ScanRenderer, ScanSystem
@@ -79,7 +81,8 @@ class Game:
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
         self.generation_error: str | None = None
         self.last_completed_floor: int | None = None
-        self.workshop_notice = "Crafting will be enabled in a later phase"
+        self.workshop_system = WorkshopSystem()
+        self.workshop_notice = self.workshop_system.notice
 
         self.running = True
         self._shutdown_complete = False
@@ -126,10 +129,6 @@ class Game:
                 Button.centered("Resume", "resume", (center_x, 330)),
                 Button.centered("Restart Run", "restart_run", (center_x, 400)),
                 Button.centered("Main Menu", "main_menu", (center_x, 470)),
-            ],
-            GameState.WORKSHOP: [
-                Button.centered("Continue", "continue_floor", (center_x, 430)),
-                Button.centered("Main Menu", "main_menu", (center_x, 500)),
             ],
             GameState.DEATH: [
                 Button.centered("New Run", "new_run", (center_x, 420)),
@@ -254,6 +253,23 @@ class Game:
                 self.transition_to(GameState.PAUSED)
             return
 
+        if self.state == GameState.WORKSHOP:
+            if key in (pygame.K_UP, pygame.K_w):
+                self.workshop_system.move_selection(-1)
+            elif key in (pygame.K_DOWN, pygame.K_s):
+                self.workshop_system.move_selection(1)
+            elif key in (pygame.K_LEFT, pygame.K_a):
+                self.workshop_system.change_target_slot(-1)
+            elif key in (pygame.K_RIGHT, pygame.K_d):
+                self.workshop_system.change_target_slot(1)
+            elif key == pygame.K_q:
+                self.workshop_system.select_slot(0)
+            elif key == pygame.K_e:
+                self.workshop_system.select_slot(1)
+            elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                self.activate_workshop_selection()
+            return
+
         if self.state == GameState.HOW_TO_PLAY:
             if key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
                 self.transition_to(GameState.MAIN_MENU)
@@ -327,7 +343,7 @@ class Game:
                     self.floor_preview_surface = None
                     self.transition_to(GameState.FLOOR_TRANSITION)
                     return
-                self.workshop_notice = "Crafting will be enabled in a later phase"
+                self.workshop_notice = "Workshop online"
                 return
             if self.placeholder_run is not None:
                 self.placeholder_run.floor += 1
@@ -350,6 +366,19 @@ class Game:
             self.transition_to(GameState.FLOOR_TRANSITION)
         elif action == "retry_seed":
             self.retry_same_seed()
+
+    def activate_workshop_selection(self) -> None:
+        if self.state is not GameState.WORKSHOP or self.placeholder_run is None:
+            return
+        activation = self.workshop_system.activate(
+            self.placeholder_run.module_loadout,
+            self.placeholder_run.material_counts,
+        )
+        self.workshop_notice = activation.message or self.workshop_system.notice
+        if activation.action is WorkshopAction.CONTINUE:
+            self.perform_action("continue_floor")
+        elif activation.action is WorkshopAction.MAIN_MENU:
+            self.perform_action("main_menu")
 
     def update(self, dt: float) -> None:
         if self.state == GameState.SPLASH:
@@ -556,6 +585,9 @@ class Game:
             self.splash_elapsed = 0.0
         elif new_state == GameState.FLOOR_TRANSITION:
             self.floor_transition_elapsed = 0.0
+        elif new_state == GameState.WORKSHOP:
+            self.workshop_system.open(self.last_completed_floor)
+            self.workshop_notice = self.workshop_system.notice
         elif new_state == GameState.PLAYING and self.placeholder_run is not None:
             if self.placeholder_run.generated_floor is None or self.player is None or self.camera is None:
                 self.prepare_generated_floor()
@@ -564,7 +596,7 @@ class Game:
         self.death_creature_id = None
         self.death_world_position = None
         self.last_completed_floor = None
-        self.workshop_notice = "Crafting will be enabled in a later phase"
+        self.workshop_notice = "Workshop online"
         self.next_seed += 1
         self.placeholder_run = PlaceholderRun(seed=self.next_seed)
         self.run_exists = True
@@ -575,7 +607,7 @@ class Game:
         self.death_creature_id = None
         self.death_world_position = None
         self.last_completed_floor = None
-        self.workshop_notice = "Crafting will be enabled in a later phase"
+        self.workshop_notice = "Workshop online"
         if self.placeholder_run is None:
             self.placeholder_run = PlaceholderRun(seed=self.next_seed)
         else:
@@ -608,7 +640,7 @@ class Game:
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
         self.generation_error = None
         self.last_completed_floor = None
-        self.workshop_notice = "Crafting will be enabled in a later phase"
+        self.workshop_notice = "Workshop online"
         self.scan_system.reset()
         self.threat_events.reset()
         self.snapshot_system.reset()
@@ -758,8 +790,9 @@ class Game:
             "score": self.placeholder_run.score,
             "materials": dict(self.placeholder_run.material_counts),
             "elapsed_time": self.placeholder_run.elapsed_time,
+            "modules": self.placeholder_run.module_loadout.snapshot(),
         }
-        self.workshop_notice = "Crafting will be enabled in a later phase"
+        self.workshop_notice = "Workshop online"
         self._clear_floor_runtime()
         self.transition_to(GameState.WORKSHOP)
 
@@ -775,11 +808,12 @@ class Game:
             "score": self.placeholder_run.score,
             "materials": dict(self.placeholder_run.material_counts),
             "elapsed_time": self.placeholder_run.elapsed_time,
+            "modules": self.placeholder_run.module_loadout.snapshot(),
         }
         self.last_completed_floor = 2
         self.placeholder_run.completed_floor_count = max(self.placeholder_run.completed_floor_count, 2)
         self.placeholder_run.floor_completion_summaries[2] = summary
-        self.workshop_notice = "Crafting will be enabled in a later phase"
+        self.workshop_notice = "Workshop online"
         self._clear_floor_runtime()
         self.transition_to(GameState.WORKSHOP)
 
@@ -796,6 +830,7 @@ class Game:
             "score": self.placeholder_run.score,
             "materials": dict(self.placeholder_run.material_counts),
             "elapsed_time": self.placeholder_run.elapsed_time,
+            "modules": self.placeholder_run.module_loadout.snapshot(),
         }
         self.last_completed_floor = 3
         self.placeholder_run.completed_floor_count = max(self.placeholder_run.completed_floor_count, 3)
@@ -1226,37 +1261,116 @@ class Game:
 
     def render_workshop(self) -> None:
         self.draw_background()
-        module_icons = self.visual_assets["module_icons"]
-        assert isinstance(module_icons, dict)
-        for index, icon_name in enumerate(("scrap", "circuit", "power_cell")):
-            icon = module_icons[icon_name]
-            assert isinstance(icon, pygame.Surface)
-            self.screen.blit(icon, (settings.WINDOW_WIDTH // 2 - 92 + index * 68, 330))
         run = self.placeholder_run
-        score = run.score if run is not None else 0
-        materials = run.material_counts if run is not None else {"scrap": 0, "circuit": 0, "power_cell": 0}
+        if run is None:
+            self.draw_centered_text("Workshop unavailable", "subtitle", settings.COLOR_WARNING, 260)
+            return
+
+        loadout = run.module_loadout
+        materials = run.material_counts
         if self.last_completed_floor == 2:
             title = "Floor 2 Complete"
             status = "Security override complete"
-        elif self.last_completed_floor == 1:
+        else:
             title = "Floor 1 Complete"
             status = "Power restored"
-        else:
-            title = "Elevator Workshop"
-            status = "Systems standing by"
-        self.draw_centered_text(title, "subtitle", settings.COLOR_TEXT, 185)
-        self.draw_centered_text(status, "body", settings.COLOR_ACCENT, 245)
-        self.draw_centered_text(f"Score {score}", "body", settings.COLOR_TEXT_MUTED, 285)
-        completed = run.completed_floor_count if run is not None else 0
-        self.draw_centered_text(f"Completed floors {completed}", "small", settings.COLOR_TEXT_MUTED, 312)
+
+        self.draw_centered_text(title, "subtitle", settings.COLOR_TEXT, 48)
+        self.draw_centered_text(status, "small", settings.COLOR_ACCENT, 88)
         self.draw_centered_text(
-            f"Materials S:{materials.get('scrap', 0)} C:{materials.get('circuit', 0)} P:{materials.get('power_cell', 0)}",
+            f"Score {run.score}   Materials  S:{materials.get('scrap', 0)} "
+            f"C:{materials.get('circuit', 0)} P:{materials.get('power_cell', 0)}",
             "small",
             settings.COLOR_TEXT_MUTED,
-            370,
+            118,
         )
-        self.draw_centered_text(self.workshop_notice, "small", settings.COLOR_TEXT_MUTED, 398)
-        self.draw_button_group(GameState.WORKSHOP)
+
+        module_icons = self.visual_assets["module_icons"]
+        assert isinstance(module_icons, dict)
+        card_width = 540
+        card_height = 112
+        positions = ((70, 150), (670, 150), (70, 280), (670, 280))
+        small_font = self.fonts["small"]
+        body_font = self.fonts["body"]
+        for index, definition in enumerate(MODULE_DEFINITIONS):
+            x, y = positions[index]
+            selected = self.workshop_system.selected_index == index
+            crafted = loadout.is_crafted(definition.module_type)
+            affordable = loadout.can_afford(definition.module_type, materials)
+            fill = settings.COLOR_PANEL_SELECTED if selected else settings.COLOR_PANEL
+            border = settings.COLOR_ACCENT if selected else settings.COLOR_ACCENT_DIM
+            rect = pygame.Rect(x, y, card_width, card_height)
+            pygame.draw.rect(self.screen, fill, rect, border_radius=8)
+            pygame.draw.rect(self.screen, border, rect, width=2 if selected else 1, border_radius=8)
+
+            icon = module_icons[definition.icon_key]
+            assert isinstance(icon, pygame.Surface)
+            self.screen.blit(icon, icon.get_rect(center=(x + 55, y + 56)))
+            name_image = body_font.render(definition.display_name, True, settings.COLOR_TEXT)
+            self.screen.blit(name_image, (x + 102, y + 12))
+            description = small_font.render(definition.description, True, settings.COLOR_TEXT_MUTED)
+            self.screen.blit(description, (x + 102, y + 46))
+            recipe_text = "  ".join(f"{name[0].upper()}:{amount}" for name, amount in definition.recipe.items())
+            status_text = "CRAFTED" if crafted else ("AVAILABLE" if affordable else "MISSING MATERIALS")
+            status_color = settings.COLOR_SUCCESS if crafted else (settings.COLOR_ACCENT if affordable else settings.COLOR_WARNING)
+            recipe_image = small_font.render(f"Recipe {recipe_text}", True, settings.COLOR_TEXT_MUTED)
+            status_image = small_font.render(status_text, True, status_color)
+            self.screen.blit(recipe_image, (x + 102, y + 76))
+            self.screen.blit(status_image, (x + 365, y + 76))
+            equipped_slot = loadout.equipped_slot_for(definition.module_type)
+            if equipped_slot is not None:
+                badge = small_font.render(f"SLOT {equipped_slot + 1}", True, settings.COLOR_BACKGROUND)
+                badge_rect = badge.get_rect()
+                badge_rect.inflate_ip(14, 8)
+                badge_rect.topright = (rect.right - 10, rect.top + 10)
+                pygame.draw.rect(self.screen, settings.COLOR_SUCCESS, badge_rect, border_radius=5)
+                self.screen.blit(badge, badge.get_rect(center=badge_rect.center))
+
+        slot_y = 426
+        self.draw_centered_text("Equipment slots", "small", settings.COLOR_TEXT_MUTED, slot_y - 20)
+        for slot_index in range(2):
+            x = 310 + slot_index * 350
+            rect = pygame.Rect(x, slot_y, 310, 64)
+            target = self.workshop_system.target_slot == slot_index
+            pygame.draw.rect(
+                self.screen,
+                settings.COLOR_PANEL_SELECTED if target else settings.COLOR_PANEL,
+                rect,
+                border_radius=7,
+            )
+            pygame.draw.rect(
+                self.screen,
+                settings.COLOR_ACCENT if target else settings.COLOR_ACCENT_DIM,
+                rect,
+                width=2 if target else 1,
+                border_radius=7,
+            )
+            value = loadout.equipped_slots[slot_index]
+            module_name = MODULE_BY_VALUE[value].display_name if value in MODULE_BY_VALUE else "Empty"
+            label = small_font.render(f"{'Q' if slot_index == 0 else 'E'} / Slot {slot_index + 1}: {module_name}", True, settings.COLOR_TEXT)
+            self.screen.blit(label, label.get_rect(center=rect.center))
+
+        action_y = 526
+        action_label = self.workshop_system.action_label(loadout, materials)
+        self.draw_centered_text(action_label, "small", settings.COLOR_ACCENT, action_y)
+        self.draw_centered_text(self.workshop_notice, "small", settings.COLOR_TEXT_MUTED, action_y + 28)
+
+        footer_entries = (("Continue", self.workshop_system.CONTINUE_INDEX), ("Main Menu", self.workshop_system.MAIN_MENU_INDEX))
+        for offset, (label_text, selection_index) in enumerate(footer_entries):
+            x = 390 + offset * 330
+            rect = pygame.Rect(x, 600, 280, 52)
+            selected = self.workshop_system.selected_index == selection_index
+            pygame.draw.rect(self.screen, settings.COLOR_PANEL_SELECTED if selected else settings.COLOR_PANEL, rect, border_radius=7)
+            pygame.draw.rect(self.screen, settings.COLOR_ACCENT if selected else settings.COLOR_ACCENT_DIM, rect, width=2 if selected else 1, border_radius=7)
+            label = self.fonts["button"].render(label_text, True, settings.COLOR_TEXT)
+            self.screen.blit(label, label.get_rect(center=rect.center))
+
+        self.draw_centered_text(
+            "Up/Down select | Left/Right or Q/E choose slot | Enter craft/equip",
+            "small",
+            settings.COLOR_TEXT_MUTED,
+            682,
+        )
 
     def render_floor_transition(self) -> None:
         self.draw_background()
@@ -1382,6 +1496,10 @@ class Game:
                 f"Materials S:{self.placeholder_run.material_counts.get('scrap', 0)} "
                 f"C:{self.placeholder_run.material_counts.get('circuit', 0)} "
                 f"P:{self.placeholder_run.material_counts.get('power_cell', 0)} | Score {self.placeholder_run.score}"
+            ),
+            (
+                f"Q {MODULE_BY_VALUE[self.placeholder_run.module_loadout.equipped_slots[0]].short_name if self.placeholder_run.module_loadout.equipped_slots[0] in MODULE_BY_VALUE else 'EMPTY'} | "
+                f"E {MODULE_BY_VALUE[self.placeholder_run.module_loadout.equipped_slots[1]].short_name if self.placeholder_run.module_loadout.equipped_slots[1] in MODULE_BY_VALUE else 'EMPTY'}"
             ),
             prompt_line,
             "SCAN READY" if self.scan_system.ready else f"SCAN {self.scan_system.cooldown_remaining:0.1f}s",

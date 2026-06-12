@@ -2,7 +2,7 @@
 
 Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is currently complete through Phase 12. It contains the application shell, state system, cached asset pipeline, seeded and validated procedural floors, player movement, camera and collisions, dynamic doors, fixed-origin DDA scan occlusion, fading static traces, generic object echoes, moving invisible creatures, threat-aware creature AI, deterministic material pickups, Floor 1 restore-power objectives, Floor 2 security override objectives, elevator completion, death/restart flow, score/material counters, tests and headless preview tools. Workshop crafting, Floor 3 extraction, active modules and final victory are later phases.
+This repository is complete through Phase 14. It contains the full three-floor one-life run, deterministic objectives, Echo Core extraction and victory, cached assets, procedural generation, dynamic doors, fixed-origin DDA scan occlusion, object and creature echoes, threat-aware creature AI, material pickups, score, workshop crafting, a persistent two-slot module loadout, tests and headless preview tools. The four modules can now be crafted and equipped; their active gameplay effects are implemented in Phases 15 and 16.
 
 ## Setup
 
@@ -24,15 +24,16 @@ python main.py
 
 ## Current Controls
 
-- Up and Down: move menu selection
+- Up and Down: move menu or workshop selection
 - Enter or Space: confirm selected menu item
-- Mouse: hover and click buttons
+- Mouse: hover and click standard menu buttons
 - WASD or arrow keys: move the player during PLAYING
 - Escape: skip splash, pause during PLAYING, resume from pause or return from How to Play
 - Backspace: return from How to Play
 - F2: toggle the camera-space debug overlay during PLAYING
 - F3: toggle scan, snapshot and AI diagnostics during PLAYING
 - F6/F7/F8: door debug controls, only while F2 debug mode is active
+- Workshop: Up/Down selects a recipe, Left/Right or Q/E selects a slot, Enter crafts/equips
 
 Planned gameplay controls:
 
@@ -64,11 +65,13 @@ python tools/ai_preview.py --seed 12345 --floor 1 --headless
 python tools/ai_preview.py --seed 12345 --floor 2 --headless
 python tools/floor1_preview.py --seed 12345 --headless
 python tools/floor2_preview.py --seed 12345 --headless
+python tools/floor3_preview.py --seed 12345 --headless
+python tools/workshop_preview.py --seed 12345 --headless
 python -m py_compile main.py
 python -c "import main; print('main import ok')"
 ```
 
-Workshop crafting, Floor 3 extraction, active modules and final HUD scoring remain later phases.
+Floor 3 extraction, victory and workshop crafting are implemented. Active module effects and final HUD/effect polish remain later phases.
 
 ## Assets
 
@@ -292,7 +295,7 @@ Phase 10 adds the authoritative creature states `PATROL`, `INVESTIGATE`, `SEARCH
 - `CHASE`: entered only through direct perception: the player must be within detection range and line of sight must pass through the same wall, corner and dynamic-door blocker rules as scan raycasting. If sight is lost, the creature follows the last known player position briefly, then searches.
 - `STUNNED`: implemented as an API preparation state for later Shock Pulse gameplay. Direct calls such as `creature.stun(duration)` stop movement and preserve collision danger, but no module input or inventory is implemented yet.
 
-Threat events are stored in `ThreatEventSystem`. The source types are `PLAYER_SCAN`, `GENERATOR`, `RELAY`, `CONTAINMENT_CONTROL`, `ECHO_CORE`, `SHOCK_PULSE`, `DECOY_BEACON` and `SCAN_PROJECTOR`; player scans create `PLAYER_SCAN` events and Phase 11 generator activation creates one strong `GENERATOR` event. Relevance uses a simple strength, age-decay and distance formula with hearing-radius filtering and hysteresis so creatures do not switch targets for tiny differences.
+Threat events are stored in `ThreatEventSystem`. The source types are `PLAYER_SCAN`, `GENERATOR`, `RELAY`, `ECHO_CORE`, `SHOCK_PULSE`, `DECOY_BEACON` and `SCAN_PROJECTOR`; player scans create `PLAYER_SCAN` events and Phase 11 generator activation creates one strong `GENERATOR` event. Relevance uses a simple strength, age-decay and distance formula with hearing-radius filtering and hysteresis so creatures do not switch targets for tiny differences.
 
 Tile navigation lives in `game/world/navigation.py` and uses deterministic four-way A*. It respects map bounds, walls, obstacles, pillars and the existing dynamic door blocker registry. Closed, locked and wedged-closed doors block paths and line of sight; open and wedged-open doors allow them. Each AI stores pathfinding timers and counters so A* is not run every frame.
 
@@ -347,7 +350,7 @@ Phase 12 adds the second floor objective. Floor 2 begins with ordinary facility 
 
 Relay A and Relay B are deterministic scan-detectable terminals in distinct secure rooms. Standing in range and holding **F** for the configured 2.0 second duration activates each relay. Releasing **F**, leaving range, pausing outside gameplay or dying prevents partial progress from leaking forward. Each relay awards score once and emits exactly one strong `RELAY` threat event that existing creatures can investigate through the shared threat system.
 
-After both relays are active, the elevator unlocks and shows `Press F to enter elevator`. Interacting with it completes Floor 2, archives a Floor 2 summary, preserves run seed, score, materials and completed-floor count, clears all active Floor 2 runtime entities, scans, snapshots and threats, then returns to WORKSHOP. Continue after Floor 2 now descends through the transition and creates Floor 3 while preserving the run summary, score and materials.
+After both relays are active, the elevator unlocks and shows `Press F to enter elevator`. Interacting with it completes Floor 2, archives a Floor 2 summary, preserves run seed, score, materials and completed-floor count, clears all active Floor 2 runtime entities, scans, snapshots and threats, then returns to WORKSHOP. Continue after Floor 2 is a controlled placeholder notice for Floor 3; it does not generate Floor 3 in this phase.
 
 F2 debug mode shows the selected gate edge, public/secure room IDs, security door, keycard, relay locations, relay progress, elevator state and placement validation errors. F3 adds Floor 2 objective stage, keycard/door/relay/elevator status and RELAY threat counts.
 
@@ -355,6 +358,8 @@ Create deterministic Floor 2 screenshots with:
 
 ```powershell
 python tools/floor2_preview.py --seed 12345 --headless
+python tools/floor3_preview.py --seed 12345 --headless
+python tools/workshop_preview.py --seed 12345 --headless
 ```
 
 Headless preview output:
@@ -373,39 +378,43 @@ Headless preview output:
 
 ## Floor 3 Echo Core Extraction And Victory
 
-Phase 13 completes the run. Continue from the Floor 2 workshop descends to Floor 3 with the same run seed, score, material counters and completed-floor summaries. Floor 3 begins powered with two invisible AI creatures, one locked containment door, one containment component, one containment control and the Echo Core.
+Phase 13 completes the playable run. After the Floor 2 workshop, Continue descends to Floor 3. The player recovers a containment component, installs it at the containment control by holding **F**, passes the unlocked containment door, recovers the Echo Core and survives the louder extraction phase. Echo Core recovery emits the strongest threat event, accelerates existing creatures and may add a deterministic third creature. Returning to the unlocked elevator clears runtime state and enters the final `VICTORY` screen with seed, score, elapsed time, materials and `3/3` floors.
 
-The containment component and control are placed on the public side of the selected containment gate. The Echo Core is placed in a deterministic containment-side room. Collect the component by contact, stand inside the containment-control interaction range and hold **F** for the configured 2.0 second installation. Releasing **F** or leaving range resets progress; pausing freezes it.
-
-Completing the control interaction unlocks the authoritative containment door, awards score and emits exactly one strong `CONTAINMENT_CONTROL` threat event. The door then uses the existing powered automatic-door, blocker, scan, line-of-sight and AI-navigation behaviour.
-
-Collecting the Echo Core starts extraction. It awards score, emits exactly one stronger and longer-lived `ECHO_CORE` threat event, unlocks the elevator, accelerates the existing creatures and deterministically adds a third creature when a validated spawn is available. The player must return to the elevator with one life remaining. Entering it clears all Floor 3 runtime state, archives the final summary and enters `VICTORY`.
-
-The victory screen displays final time, score, seed, completed floors and retained materials. `New Run` resets all progression with a new seed; `Main Menu` discards the run.
-
-Floor 3 HUD stages:
-
-- `Find the containment component`
-- `Install component at containment control`
-- `Retrieve the Echo Core`
-- `Return to the elevator`
-
-Create deterministic Floor 3 and victory screenshots with:
+Create deterministic Floor 3 screenshots with:
 
 ```powershell
 python tools/floor3_preview.py --seed 12345 --headless
 ```
 
+## Workshop Crafting And Module Loadout
+
+Phase 14 replaces the workshop placeholder after Floors 1 and 2 with a keyboard-driven crafting screen. Crafting consumes only collected materials; score never pays for recipes. Crafted modules remain owned for the rest of the run, and exactly two may be equipped at once. Replacing or unequipping a module never destroys it. Death, Retry Same Seed and New Run reset the complete crafted/equipped loadout because the game uses a one-life run.
+
+Recipes:
+
+- **Shock Pulse** — 1 circuit, 1 power cell.
+- **Decoy Beacon** — 1 scrap, 1 circuit.
+- **Door Wedge** — 2 scrap.
+- **Scan Projector** — 1 scrap, 1 circuit, 1 power cell.
+
+Workshop controls:
+
+- Up/Down: select one of four recipes, Continue or Main Menu.
+- Left/Right or Q/E: select equipment slot 1 or 2.
+- Enter/Space: craft an unowned module, or equip/unequip an owned module in the selected slot.
+
+The first successful craft automatically equips the module in the selected slot. A later module may replace that slot while both remain crafted. The gameplay HUD displays the current Q/E loadout. Phase 14 intentionally does not activate the module effects; Shock Pulse and Decoy Beacon are Phase 15, while Door Wedge and Scan Projector are Phase 16.
+
+Preview the workshop without playing through a floor:
+
+```powershell
+python tools/workshop_preview.py --seed 12345 --headless
+```
+
 Headless preview output:
 
-- `artifacts/floor3_preview_12345_initial.png`
-- `artifacts/floor3_preview_12345_component.png`
-- `artifacts/floor3_preview_12345_component_collected.png`
-- `artifacts/floor3_preview_12345_control_progress.png`
-- `artifacts/floor3_preview_12345_containment_open.png`
-- `artifacts/floor3_preview_12345_echo_core.png`
-- `artifacts/floor3_preview_12345_extraction.png`
-- `artifacts/floor3_preview_12345_elevator.png`
-- `artifacts/floor3_preview_12345_victory.png`
-
-F2 includes containment partition, objective positions, door state, installation progress and threat IDs. F3 includes objective stage, extraction state, elevator state and event counts.
+- `artifacts/workshop_preview_12345_initial.png`
+- `artifacts/workshop_preview_12345_shock_crafted.png`
+- `artifacts/workshop_preview_12345_two_slots.png`
+- `artifacts/workshop_preview_12345_replacement.png`
+- `artifacts/workshop_preview_12345_floor2.png`
