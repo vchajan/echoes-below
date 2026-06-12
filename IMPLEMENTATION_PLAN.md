@@ -104,3 +104,12 @@ Manual checks remain important for feel: movement, scan readability, creature te
 ## Fallback Priorities
 
 If time becomes limited, preserve the central scan, stealth, three-floor objective flow, death/victory states and school-visible features first. Simplify art, creature variety, workshop presentation and balance before cutting core scan occlusion, deterministic generation, collisions, animations or state flow.
+
+## Phase 7 Scan Architecture Notes
+
+The implemented scan architecture lives in `game/systems/`:
+
+- `raycasting.py` contains reusable tile-grid DDA ray traversal, exact first-hit data, dynamic-door rectangle intersection, conservative zero-width corner handling and point-to-point line of sight.
+- `scan.py` contains the fixed-origin wave, cooldown, historical static hits, fading world-space traces, safe contour connection rules, bounded scan threat-event hooks, diagnostics and a cached viewport renderer.
+
+Static geometry is raycast once when Space is pressed, never every frame. The active wave only compares its previous and current radius against sorted hit distances. Dynamic doors use the existing `DynamicBlockerRegistry`, so movement, scan and line-of-sight passability share the same authoritative door state. Future moving-creature detection will use the reusable line-of-sight function at the moment the wave crosses each creature rather than precomputing creature positions.

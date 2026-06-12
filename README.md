@@ -201,3 +201,29 @@ It generates 150 seeds for each of Floors 1, 2 and 3, validates each floor, and 
 - `GAME_DESIGN.md`: game concept, mechanics, floors and player flow.
 - `IMPLEMENTATION_PLAN.md`: planned architecture, phases, tests and risks.
 - `PROGRESS.md`: implementation checklist.
+
+## Fixed-Origin Scan And Occlusion
+
+Phase 7 implements the central scan mechanic. Press **Space** during PLAYING to emit a scan from the player's exact world position at that moment. The origin remains fixed even if the player and camera move while the wave expands.
+
+The scan performs one 360-degree tile-grid DDA raycast at activation time using 720 configurable rays. Each ray stops at the first static blocker (`VOID`, walls, damaged walls, machinery obstacles or pillars) or a dynamic closed/locked door. Open and wedged-open doors allow the ray to continue. Door state is sampled when the scan starts, so opening a door later does not change an already calculated historical scan.
+
+The circular wave is only a visual front. Geometry appears when the front reaches each stored hit distance. Revealed cyan points and safe neighbouring outline segments remain in world coordinates, follow the camera correctly and fade after approximately 3.8 seconds. The distant tile map is almost completely black in normal play; only the small local player glow and scan traces provide information. F2 keeps the bright developer view and displays sampled ray paths, hit categories and blocker IDs.
+
+The scan has a short cooldown but no battery or charges. F3 toggles a diagnostics panel showing FPS, frame time, ray count, raw/deduplicated hit counts, active traces, segment count and raycast timing.
+
+Preview and benchmark commands:
+
+```powershell
+python tools/scan_preview.py --seed 12345 --floor 2
+python tools/scan_preview.py --seed 12345 --floor 2 --headless
+python tools/scan_benchmark.py
+```
+
+Headless preview output:
+
+- `artifacts/scan_preview_12345_floor2_early.png`
+- `artifacts/scan_preview_12345_floor2_late.png`
+- `artifacts/scan_preview_12345_floor2_camera_shift.png`
+
+The benchmark measures only static scan computation. It does not claim graphical 60 FPS; interactive rendering still requires manual verification on the target computer.
