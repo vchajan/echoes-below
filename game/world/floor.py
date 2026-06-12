@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -20,10 +21,32 @@ class Corridor:
         return tuple(sorted((self.room_a, self.room_b)))
 
 
+@dataclass(frozen=True)
+class DoorwayCandidate:
+    tile: tuple[int, int]
+    room_id: int
+    connected_room_id: int
+    orientation: str
+
+    @property
+    def edge(self) -> tuple[int, int]:
+        return tuple(sorted((self.room_id, self.connected_room_id)))
+
+
+@dataclass(frozen=True)
+class GateCandidate:
+    edge: tuple[int, int]
+    key_side_rooms: tuple[int, ...]
+    gated_rooms: tuple[int, ...]
+    doorway_tiles: tuple[tuple[int, int], ...]
+    score: int
+
+
 @dataclass
 class GeneratedFloor:
     seed: int
     floor_number: int
+    attempt_seed: int
     width: int
     height: int
     tiles: np.ndarray
@@ -33,12 +56,19 @@ class GeneratedFloor:
     start_room_id: int
     player_spawn: tuple[int, int]
     elevator_tile: tuple[int, int]
+    elevator_approach_tiles: list[tuple[int, int]]
     doorway_candidates: list[tuple[int, int]]
+    doorway_data: list[DoorwayCandidate]
     candidate_creature_spawns: list[tuple[int, int]]
     candidate_objective_rooms: list[int]
+    objective_room_groups: dict[str, list[int]]
     candidate_material_rooms: list[int]
+    material_room_scores: dict[int, int]
+    gate_candidates: list[GateCandidate]
+    containment_room_candidates: list[int]
     generation_attempt: int
     corridor_width: int
+    validation_report: Any | None = None
     metadata: dict[str, int] = field(default_factory=dict)
 
     def in_bounds(self, tile_x: int, tile_y: int) -> bool:

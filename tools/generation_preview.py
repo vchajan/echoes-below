@@ -44,9 +44,11 @@ def build_preview(seed: int, floor_number: int) -> tuple[pygame.Surface, object,
     preview.blit(overview, rect)
 
     font = pygame.font.SysFont("consolas", 20, bold=True)
+    report = generated_floor.validation_report
     title = font.render(
-        f"Seed {seed} | Floor {floor_number} | {generated_floor.width}x{generated_floor.height} | "
-        f"Rooms {len(generated_floor.rooms)} | Edges {len(generated_floor.graph_edges)}",
+        f"Seed {seed} | Floor {floor_number} | Attempt {generated_floor.generation_attempt} | "
+        f"Rooms {len(generated_floor.rooms)} | Edges {len(generated_floor.graph_edges)} | "
+        f"Cycle {report.graph_cycle_rank if report else '?'}",
         True,
         (225, 236, 232),
     )
@@ -66,13 +68,29 @@ def main() -> int:
     output_path = artifacts / f"generation_preview_{args.seed}_floor{args.floor}.png"
     pygame.image.save(preview, str(output_path))
 
-    print(f"seed: {generated_floor.seed}")
+    report = generated_floor.validation_report
+    print(f"base_seed: {generated_floor.seed}")
+    print(f"attempt_index: {generated_floor.generation_attempt}")
+    print(f"attempt_seed: {generated_floor.attempt_seed}")
     print(f"floor: {generated_floor.floor_number}")
     print(f"dimensions: {generated_floor.width}x{generated_floor.height}")
     print(f"rooms: {len(generated_floor.rooms)}")
     print(f"graph_edges: {len(generated_floor.graph_edges)}")
+    if report is not None:
+        print(f"cycle_rank: {report.graph_cycle_rank}")
+        print(f"walkable_tiles: {report.total_walkable_tiles}")
+        print(f"reachable_walkable_tiles: {report.reachable_walkable_tiles}")
+        print(f"connectivity_ratio: {report.connectivity_ratio:0.3f}")
+        print(f"minimum_spawn_distance: {report.minimum_spawn_distance}")
+        print(f"validation_warnings: {report.warnings}")
     print(f"player_spawn: {generated_floor.player_spawn}")
     print(f"elevator: {generated_floor.elevator_tile}")
+    print(f"elevator_approach_tiles: {generated_floor.elevator_approach_tiles}")
+    print(f"creature_spawn_candidates: {generated_floor.candidate_creature_spawns}")
+    print(f"objective_room_groups: {generated_floor.objective_room_groups}")
+    print(f"material_room_candidates: {generated_floor.candidate_material_rooms}")
+    print(f"gate_edge_candidates: {[gate.edge for gate in generated_floor.gate_candidates]}")
+    print(f"containment_room_candidates: {generated_floor.containment_room_candidates}")
     print(f"preview: {output_path}")
 
     if not args.headless:

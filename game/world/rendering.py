@@ -48,6 +48,14 @@ def draw_debug_overlay(
             int(preview_rect.top + (tile[1] + 0.5) * tile_h),
         )
 
+    objective_colors = {
+        "near": (120, 180, 255),
+        "middle": (255, 220, 80),
+        "far": (255, 128, 64),
+    }
+    containment_set = set(generated_floor.containment_room_candidates)
+    gated_set = {room_id for gate in generated_floor.gate_candidates[:3] for room_id in gate.gated_rooms}
+
     for room in generated_floor.rooms:
         rect = pygame.Rect(
             int(preview_rect.left + room.rect.left * tile_w),
@@ -56,6 +64,13 @@ def draw_debug_overlay(
             max(1, int(room.rect.height * tile_h)),
         )
         color = (118, 241, 173) if room.room_id == generated_floor.start_room_id else (72, 226, 255)
+        for group, room_ids in generated_floor.objective_room_groups.items():
+            if room.room_id in room_ids:
+                color = objective_colors.get(group, color)
+        if room.room_id in gated_set:
+            color = (190, 128, 255)
+        if room.room_id in containment_set:
+            color = (255, 80, 180)
         pygame.draw.rect(surface, color, rect, 1)
         pygame.draw.circle(surface, color, point(room.center), 3)
         if font is not None:
@@ -69,6 +84,16 @@ def draw_debug_overlay(
             point(generated_floor.rooms[room_a].center),
             point(generated_floor.rooms[room_b].center),
             1,
+        )
+
+    for gate in generated_floor.gate_candidates[:3]:
+        room_a, room_b = gate.edge
+        pygame.draw.line(
+            surface,
+            (190, 128, 255),
+            point(generated_floor.rooms[room_a].center),
+            point(generated_floor.rooms[room_b].center),
+            3,
         )
 
     for doorway in generated_floor.doorway_candidates:

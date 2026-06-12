@@ -8,7 +8,7 @@ Last updated: 2026-06-12
 - [x] Phase 1: Minimal Pygame shell, splash screen, automatic menu transition and Play button.
 - [x] Phase 2: Asset manager, spritesheets, tiles, animations and visible score HUD.
 - [x] Phase 3: Seeded room-and-corridor procedural generation with validation.
-- [ ] Phase 4: Player movement, keyboard input, collisions, doors and objective interactions.
+- [x] Phase 4: Procedural generator validation, graph loops and safe content placement.
 - [ ] Phase 5: Fixed-origin scan with occlusion, expansion and fading traces.
 - [ ] Phase 6: Creature movement, collision death and scan snapshots.
 - [ ] Phase 7: Three-floor run flow, floor transitions, death options and victory.
@@ -91,3 +91,40 @@ Last updated: 2026-06-12
 - `python tools/generation_preview.py --seed 12345 --floor 1 --headless`: passed.
 - `python -m py_compile main.py`: passed.
 - Preview confirmed at `artifacts/generation_preview_12345_floor1.png`.
+
+## Phase 4 Notes
+
+- Added `game/world/validation.py` with reusable flood fill, path reconstruction, graph checks, cycle rank, spawn/elevator safety, doorway safety, obstacle connectivity checks, corridor diagnostics and structured validation reports.
+- Formalised deterministic retries with derived attempt seeds recorded on each generated floor.
+- Added explicit Floor 1, Floor 2 and Floor 3 profiles for room counts, required/preferred cycles, obstacle density and candidate minimums.
+- Strengthened generation acceptance so final maps require graph connectivity, walkable connectivity, safe player spawn, safe elevator approach, reachable candidates, valid doorways and later-floor cycle rank.
+- Expanded generated floor metadata with attempt seed, elevator approach tiles, doorway orientation data, grouped objective-room candidates, scored material rooms, gate-edge candidates and containment-room candidates.
+- Updated debug rendering and preview output with validation status, cycle rank, connectivity ratio, candidate groups, gate candidates and containment candidates.
+- Added `tools/generation_test.py` for a 450-floor stress test across all three floors.
+- Current limitations reserved for later phases: no player movement, camera, dynamic door entities, scan raycasting, creatures, AI, final objectives, material pickups, crafting or modules.
+
+## Phase 4 Created Or Updated Files
+
+- `game/world/validation.py`
+- `game/world/generator.py`
+- `game/world/floor.py`
+- `game/world/rendering.py`
+- `tests/test_validation.py`
+- `tools/generation_test.py`
+- `tools/generation_preview.py`
+- `README.md`
+- `PROGRESS.md`
+
+## Phase 4 Test Results
+
+- Baseline before editing: `python -m unittest discover -s tests`, `python tools/smoke_test.py`, `python tools/generation_sweep.py`, `python tools/generation_preview.py --seed 12345 --floor 1 --headless` and `python -m py_compile main.py` all passed.
+- `python tools/generate_placeholder_assets.py`: passed.
+- `python -m unittest discover -s tests`: passed, 72 tests.
+- `python tools/smoke_test.py`: passed.
+- `python tools/generation_test.py`: passed for 450 generated floors.
+- Stress statistics: retries used 104, maximum attempt index 4, average attempt index 1.313, average room count 11.816, cycle rank distribution `{1: 150, 2: 300}`, average connectivity ratio 1.000.
+- `python tools/generation_preview.py --seed 12345 --floor 1 --headless`: passed.
+- `python tools/generation_preview.py --seed 12345 --floor 2 --headless`: passed.
+- `python tools/generation_preview.py --seed 12345 --floor 3 --headless`: passed.
+- `python -m py_compile main.py`: passed.
+- Previews confirmed at `artifacts/generation_preview_12345_floor1.png`, `artifacts/generation_preview_12345_floor2.png` and `artifacts/generation_preview_12345_floor3.png`.

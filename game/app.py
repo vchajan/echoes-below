@@ -551,6 +551,19 @@ class Game:
                 self.floor_preview_rect,
                 self.fonts["small"],
             )
+            report = self.placeholder_run.generated_floor.validation_report
+            if report is not None:
+                debug_lines = [
+                    f"Attempt {self.placeholder_run.generated_floor.generation_attempt} | "
+                    f"Attempt seed {self.placeholder_run.generated_floor.attempt_seed}",
+                    f"Validation {'OK' if report.is_valid else 'FAILED'} | "
+                    f"Cycle rank {report.graph_cycle_rank} | "
+                    f"Connectivity {report.connectivity_ratio:0.3f}",
+                    f"Creature candidates {len(self.placeholder_run.generated_floor.candidate_creature_spawns)} | "
+                    f"Objective rooms {len(self.placeholder_run.generated_floor.candidate_objective_rooms)} | "
+                    f"Gate candidates {len(self.placeholder_run.generated_floor.gate_candidates)}",
+                ]
+                self.draw_text_lines(debug_lines, 54, 140, 24)
 
     def draw_placeholder_asset_scene(self) -> None:
         tiles = self.visual_assets["tiles"]

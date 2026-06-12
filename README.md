@@ -2,7 +2,7 @@
 
 Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is currently in Phase 3. It contains the application shell, state system, asset manager, generated placeholder spritesheets, seeded procedural floor generation, placeholder screens, tests and headless verification tools. Full gameplay systems are planned for later phases.
+This repository is currently in Phase 4. It contains the application shell, state system, asset manager, generated placeholder spritesheets, seeded procedural floor generation, stronger generator validation, placeholder screens, tests and headless verification tools. Full gameplay systems are planned for later phases.
 
 ## Setup
 
@@ -50,7 +50,10 @@ python -m unittest discover -s tests
 python tools/smoke_test.py
 python tools/asset_preview.py --headless
 python tools/generation_sweep.py
+python tools/generation_test.py
 python tools/generation_preview.py --seed 12345 --floor 1 --headless
+python tools/generation_preview.py --seed 12345 --floor 2 --headless
+python tools/generation_preview.py --seed 12345 --floor 3 --headless
 python -m py_compile main.py
 python -c "import main; print('main import ok')"
 ```
@@ -98,9 +101,17 @@ The preview is saved to `artifacts/asset_preview.png`.
 
 ## Procedural Generation
 
-Phase 3 adds a deterministic room-and-corridor floor generator. It uses a local `random.Random` instance, so a supplied seed, floor number and generator configuration produce the same room rectangles, graph edges, corridors, tile grid, player spawn and elevator tile.
+Phase 4 uses a deterministic room-and-corridor floor generator with bounded retries. It uses local `random.Random` instances only. A supplied base seed, floor number and generator configuration produce the same successful attempt index, derived attempt seed, room rectangles, graph edges, corridors, tile grid, player spawn, elevator tile and candidate lists.
 
 New Run currently generates a Floor 1 debug overview. The map is shown as a temporary scaled preview using the Phase 2 industrial tileset. This is not the final gameplay camera, and there is no player movement yet.
+
+Validation now checks walkable connectivity, elevator reachability, graph connectivity, graph cycle rank, safe player/elevator placement, obstacle connectivity, doorway validity, corridor continuity and future content candidates. Floor 2 and Floor 3 require at least one graph cycle. Floor 3 prefers two loops when room count allows it.
+
+Current floor profiles:
+
+- Floor 1: 8 to 10 rooms, one preferred loop, lighter obstacles and at least one creature candidate.
+- Floor 2: 11 to 13 rooms, required loop, more candidates for security-door/keycard/relay planning and at least two creature candidates.
+- Floor 3: 13 to 16 rooms, required loop, two preferred loops, containment candidates and at least two creature candidates.
 
 Tile types are centralised in `game/world/tiles.py`:
 
@@ -121,15 +132,19 @@ Create a headless generation preview with:
 
 ```powershell
 python tools/generation_preview.py --seed 12345 --floor 1 --headless
+python tools/generation_preview.py --seed 12345 --floor 2 --headless
+python tools/generation_preview.py --seed 12345 --floor 3 --headless
 ```
 
-The preview is saved to `artifacts/generation_preview_12345_floor1.png`.
+The previews are saved to `artifacts/generation_preview_12345_floor1.png`, `artifacts/generation_preview_12345_floor2.png` and `artifacts/generation_preview_12345_floor3.png`.
 
-Run the Phase 3 lightweight seed sweep with:
+Run the Phase 4 stress test with:
 
 ```powershell
-python tools/generation_sweep.py
+python tools/generation_test.py
 ```
+
+It generates 150 seeds for each of Floors 1, 2 and 3, validates each floor, and checks deterministic regeneration on a subset.
 
 ## Documentation
 
