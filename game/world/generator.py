@@ -129,6 +129,9 @@ class FloorGenerator:
             report = validate_floor(floor, config)
             floor.validation_report = report
             if report.is_valid:
+                if floor_number >= 2 and not floor.gate_candidates:
+                    validation_errors = ["floor requires at least one gate candidate"]
+                    continue
                 return floor
             validation_errors = report.errors
 

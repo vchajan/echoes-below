@@ -82,9 +82,10 @@ Doors are rendered separately from the cached static floor surface. The static t
 10. Phase 9: moving invisible creature, dynamic creature echoes, death and restart.
 11. Phase 10: threat-aware creature AI and pathfinding.
 12. Phase 11: Floor 1 restore-power objective, generator repair, power activation, elevator completion and controlled workshop transition.
-13. Phases 12-13: Floor 2 security objective, Floor 3 extraction and victory.
-14. Phases 14-16: workshop, recipes and four active modules.
-15. Phases 17-20: HUD/effects, performance, QA and submission documentation.
+13. Phase 12: Floor 2 security objective with keycard, security gate, two relays, relay threats and elevator completion.
+14. Phase 13: Floor 3 extraction and victory.
+15. Phases 14-16: workshop, recipes and four active modules.
+16. Phases 17-20: HUD/effects, performance, QA and submission documentation.
 
 ## Automated Tests
 
@@ -154,3 +155,14 @@ Static geometry is raycast once when Space is pressed, never every frame. The ac
 - `Game.update_gameplay` passes continuous F-state into the objective system after scan snapshots are evaluated, preserving historical component echoes before collision pickup removes the source entity.
 - Generator repair emits exactly one strong `GENERATOR` threat event through `ThreatEventSystem`, sets Floor 1 power active, updates powered doors, unlocks the existing elevator entity and leaves security/containment doors for later phases.
 - Floor completion clears floor runtime objects, scans, snapshots, objectives, doors, creatures and threat events while preserving run-level seed, score, elapsed time, restart count and material counters for the WORKSHOP placeholder.
+
+## Phase 12 Floor 2 Objective Architecture Notes
+
+- `game/systems/floor_objectives.py` now also owns `Floor2ObjectiveState`, placement metadata, validation diagnostics, keycard collection, security-door unlock, relay hold progress, relay threat emission and Floor 2 elevator completion.
+- Floor 2 generation is accepted only when a gate candidate exists. Missing gates cause the existing bounded deterministic generator retry loop to continue; no unbounded content-placement loop is introduced.
+- Security-gate selection uses generated `GateCandidate` partitions. The start/elevator/keycard side remains public, the two relays are placed in distinct secure-side rooms, and the selected security door remains the authoritative dynamic blocker for movement, scan, line of sight and creature navigation.
+- Floor 2 begins with runtime power active independently of Floor 1 power cleanup. Powered doors can operate, while the security door and elevator stay locked until their objective conditions are met.
+- `SecurityKeycardPickup` and `RelayEntity` live in `game/entities/objectives.py`. They expose stable IDs, room/tile metadata, scan positions and copied outline frames for the existing snapshot system.
+- Each relay activation is constant-time, awards score once, emits exactly one `RELAY` threat event and then becomes inert for repeated activation attempts.
+- Floor 2 completion uses the same `_clear_floor_runtime()` cleanup path as Floor 1, preserving run-level summaries, score, seed, elapsed time and materials while clearing objectives, relays, keycard, doors, creatures, scans, snapshots and threats.
+- The one-life rule remains unchanged: death on Floor 2 ends the whole run, and Retry Same Seed restarts deterministically at Floor 1.

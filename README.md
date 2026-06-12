@@ -2,7 +2,7 @@
 
 Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is currently complete through Phase 11. It contains the application shell, state system, cached asset pipeline, seeded and validated procedural floors, player movement, camera and collisions, dynamic doors, fixed-origin DDA scan occlusion, fading static traces, generic object echoes, moving invisible creatures, threat-aware creature AI, deterministic material pickups, Floor 1 restore-power objectives, elevator completion, death/restart flow, score/material counters, tests and headless preview tools. Workshop crafting, Floor 2, Floor 3 and active modules are later phases.
+This repository is currently complete through Phase 12. It contains the application shell, state system, cached asset pipeline, seeded and validated procedural floors, player movement, camera and collisions, dynamic doors, fixed-origin DDA scan occlusion, fading static traces, generic object echoes, moving invisible creatures, threat-aware creature AI, deterministic material pickups, Floor 1 restore-power objectives, Floor 2 security override objectives, elevator completion, death/restart flow, score/material counters, tests and headless preview tools. Workshop crafting, Floor 3 extraction, active modules and final victory are later phases.
 
 ## Setup
 
@@ -61,12 +61,14 @@ python tools/door_preview.py --seed 12345 --floor 2 --headless
 python tools/snapshot_preview.py --seed 12345 --floor 1 --headless
 python tools/creature_preview.py --seed 12345 --floor 1 --headless
 python tools/ai_preview.py --seed 12345 --floor 1 --headless
+python tools/ai_preview.py --seed 12345 --floor 2 --headless
 python tools/floor1_preview.py --seed 12345 --headless
+python tools/floor2_preview.py --seed 12345 --headless
 python -m py_compile main.py
 python -c "import main; print('main import ok')"
 ```
 
-Workshop crafting, Floor 2 objectives, Floor 3 extraction, active modules and final HUD scoring remain later phases.
+Workshop crafting, Floor 3 extraction, active modules and final HUD scoring remain later phases.
 
 ## Assets
 
@@ -131,7 +133,7 @@ Door types:
 - Security doors start locked, block movement and future scan, and expose an unlock API. Once unlocked, they behave like powered automatic doors.
 - Containment doors start locked, remain distinct from security doors, expose a containment unlock API, and then behave as heavier powered doors.
 
-Phase 11 replaces the earlier temporary Floor 1 power rule. Floor 1 now starts with power off; objective placement is validated so both components and the generator are reachable before repair. Powered doors stay closed until the generator is repaired. Floor 2 exposes a deterministic security-door candidate, and Floor 3 exposes a containment-door candidate for later objective phases.
+Phase 11 replaces the earlier temporary Floor 1 power rule. Floor 1 now starts with power off; objective placement is validated so both components and the generator are reachable before repair. Powered doors stay closed until the generator is repaired. Phase 12 uses the deterministic Floor 2 security-door candidate for the keycard and relay objective, while Floor 3 still exposes a containment-door candidate for a later phase.
 
 Closed, locked, opening, closing and wedged-closed doors block player movement, future scan, future line of sight and future creature navigation. Open and wedged-open doors block none of those purposes. Closing begins only after the doorway is clear, so doors do not push or trap the player.
 
@@ -319,7 +321,7 @@ Generator components and the generator are scan-detectable objects using the sam
 
 When the generator is repaired, the game sets Floor 1 power active, changes the generator to the powered state, adds score, emits exactly one strong `GENERATOR` threat event, enables normal powered-door behaviour and unlocks the elevator. Security and containment doors remain unaffected for later floors.
 
-The elevator starts locked and shows `Elevator offline` before power restoration. After the generator is powered, the elevator changes to unlocked, shows `Press F to enter elevator`, and holding **F** in range completes Floor 1. Completion adds score, clears Floor 1 runtime objects, scans, snapshots, doors, creatures, objectives and threat events, then transitions to the controlled WORKSHOP placeholder. The workshop displays Floor 1 completion, current score, material counts and the temporary `Crafting will be enabled in a later phase` message. Continue intentionally stays in this placeholder for now.
+The elevator starts locked and shows `Elevator offline` before power restoration. After the generator is powered, the elevator changes to unlocked, shows `Press F to enter elevator`, and holding **F** in range completes Floor 1. Completion adds score, clears Floor 1 runtime objects, scans, snapshots, doors, creatures, objectives and threat events, then transitions to WORKSHOP. The workshop displays Floor 1 completion, current score, material counts and the temporary `Crafting will be enabled in a later phase` message. Continue descends through the floor transition and creates Floor 2.
 
 F2 debug mode shows objective rooms, entity positions, generator interaction Rect, power/elevator state and generator threat ID. F3 adds objective stage, component count, generator progress, power state, elevator unlock state, objective-entity count and generator activation count.
 
@@ -338,3 +340,32 @@ Headless preview output:
 - `artifacts/floor1_preview_12345_powered.png`
 - `artifacts/floor1_preview_12345_elevator.png`
 - `artifacts/floor1_preview_12345_workshop.png`
+
+## Floor 2 Security Override Objective
+
+Phase 12 adds the second floor objective. Floor 2 begins with ordinary facility power active, so powered doors can operate immediately, but the required security door and elevator start locked. The player must find a scan-detectable security keycard on the public side of a selected gate, collect it by contact, then use the unlocked security door to reach the secure side.
+
+Relay A and Relay B are deterministic scan-detectable terminals in distinct secure rooms. Standing in range and holding **F** for the configured 2.0 second duration activates each relay. Releasing **F**, leaving range, pausing outside gameplay or dying prevents partial progress from leaking forward. Each relay awards score once and emits exactly one strong `RELAY` threat event that existing creatures can investigate through the shared threat system.
+
+After both relays are active, the elevator unlocks and shows `Press F to enter elevator`. Interacting with it completes Floor 2, archives a Floor 2 summary, preserves run seed, score, materials and completed-floor count, clears all active Floor 2 runtime entities, scans, snapshots and threats, then returns to WORKSHOP. Continue after Floor 2 is a controlled placeholder notice for Floor 3; it does not generate Floor 3 in this phase.
+
+F2 debug mode shows the selected gate edge, public/secure room IDs, security door, keycard, relay locations, relay progress, elevator state and placement validation errors. F3 adds Floor 2 objective stage, keycard/door/relay/elevator status and RELAY threat counts.
+
+Create deterministic Floor 2 screenshots with:
+
+```powershell
+python tools/floor2_preview.py --seed 12345 --headless
+```
+
+Headless preview output:
+
+- `artifacts/floor2_preview_12345_initial.png`
+- `artifacts/floor2_preview_12345_keycard.png`
+- `artifacts/floor2_preview_12345_keycard_collected.png`
+- `artifacts/floor2_preview_12345_door_unlocked.png`
+- `artifacts/floor2_preview_12345_relay_a_progress.png`
+- `artifacts/floor2_preview_12345_relay_a_active.png`
+- `artifacts/floor2_preview_12345_relay_b_progress.png`
+- `artifacts/floor2_preview_12345_relays_complete.png`
+- `artifacts/floor2_preview_12345_elevator.png`
+- `artifacts/floor2_preview_12345_workshop.png`

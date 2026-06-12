@@ -14,6 +14,7 @@ import pygame
 from game import settings
 from game.app import Game
 from game.entities.door import DoorState, DoorType, DynamicDoor
+from game.entities.objectives import RelayState
 from game.entities.scan_objects import ElevatorState
 from game.states import GameState
 from game.systems.creature_ai import CreatureState
@@ -251,6 +252,95 @@ def complete_floor1_objective(game: Game) -> None:
     require(game.placeholder_run is not None, "Run missing after Floor 1 completion.")
     require(game.placeholder_run.generated_floor is None, "Floor completion retained generated floor data.")
     require(len(game.threat_events.active_events) == 0, "Floor completion retained active threat events.")
+
+
+def collect_floor2_keycard(game: Game) -> None:
+    require(game.floor_objectives is not None, "Floor 2 objectives were not created.")
+    objectives = game.floor_objectives
+    require(getattr(objectives.state, "floor_number", None) == 2, "Current objective system is not Floor 2.")
+    starting_score = game.placeholder_run.score
+    place_player_at(game, objectives.keycard.tile)
+    game.update_gameplay(0.0, pygame.Vector2(0, 0), interact_held=False)
+    require(objectives.state.keycard_collected, "Floor 2 keycard was not collected.")
+    require(not objectives.keycard.scan_active, "Collected keycard stayed scan-active.")
+    require(not objectives.security_door.is_locked, "Security keycard did not unlock the security door.")
+    require(
+        objectives.security_door.state is DoorState.CLOSED,
+        "Unlocked security door should remain closed until approached.",
+    )
+    require(
+        game.placeholder_run.score == starting_score + settings.SECURITY_KEYCARD_SCORE,
+        "Security keycard score reward was not applied exactly once.",
+    )
+
+
+def activate_floor2_relay(game: Game, index: int) -> None:
+    require(game.floor_objectives is not None, "Floor 2 objectives were not created.")
+    objectives = game.floor_objectives
+    relay = objectives.relays[index]
+    starting_score = game.placeholder_run.score
+    starting_events = len(
+        [event for event in game.threat_events.active_events if event.source_type is ThreatSourceType.RELAY]
+    )
+    place_player_at(game, relay.tile)
+    for _ in range(4):
+        game.update_gameplay(
+            settings.RELAY_ACTIVATION_DURATION / 4.0,
+            pygame.Vector2(0, 0),
+            interact_held=True,
+        )
+    require(relay.state is RelayState.ACTIVE, f"Relay {relay.label} did not become active.")
+    require(
+        game.placeholder_run.score == starting_score + settings.RELAY_ACTIVATION_SCORE,
+        f"Relay {relay.label} score reward was not applied exactly once.",
+    )
+    relay_events = [
+        event for event in game.threat_events.active_events if event.source_type is ThreatSourceType.RELAY
+    ]
+    require(len(relay_events) == starting_events + 1, f"Relay {relay.label} did not emit one threat event.")
+    require(relay_events[-1].source_entity_id == relay.unique_id, "Relay threat event source was incorrect.")
+    require(
+        relay_events[-1].strength > settings.THREAT_PLAYER_SCAN_STRENGTH,
+        "Relay threat event was not stronger than PLAYER_SCAN.",
+    )
+
+
+def complete_floor2_objective(game: Game) -> None:
+    require(game.floor_objectives is not None, "Floor 2 objectives were not created.")
+    objectives = game.floor_objectives
+    if not objectives.state.keycard_collected:
+        collect_floor2_keycard(game)
+
+    require(game.elevator_entity is not None, "Elevator missing before Floor 2 completion.")
+    place_player_at(game, game.elevator_entity.tile)
+    game.update_gameplay(0.0, pygame.Vector2(0, 0), interact_held=True)
+    require(game.state is GameState.PLAYING, "Floor 2 elevator completed before both relays were active.")
+    require(game.elevator_entity.state is ElevatorState.LOCKED, "Floor 2 elevator unlocked before relay override.")
+
+    activate_floor2_relay(game, 0)
+    require(not objectives.state.elevator_unlocked, "Floor 2 elevator unlocked after only one relay.")
+    activate_floor2_relay(game, 1)
+    require(objectives.state.elevator_unlocked, "Floor 2 elevator did not unlock after both relays.")
+    require(game.elevator_entity.state is ElevatorState.UNLOCKED, "Elevator entity did not reflect Floor 2 unlock.")
+
+    expected_score = game.placeholder_run.score + settings.FLOOR2_COMPLETION_SCORE
+    place_player_at(game, game.elevator_entity.tile)
+    game.update_gameplay(0.0, pygame.Vector2(0, 0), interact_held=True)
+    require(game.state is GameState.WORKSHOP, "Floor 2 completion did not end in WORKSHOP.")
+    require(game.last_completed_floor == 2, "Floor 2 completion marker was not recorded.")
+    require(game.placeholder_run.score == expected_score, "Floor 2 completion score reward was not applied.")
+    require(game.placeholder_run.completed_floor_count == 2, "Completed floor count did not preserve Floor 2.")
+    require(2 in game.placeholder_run.floor_completion_summaries, "Floor 2 summary was not archived.")
+    require(game.placeholder_run.generated_floor is None, "Floor 2 completion retained generated floor data.")
+    require(game.floor_objectives is None, "Floor 2 completion retained objective state.")
+    require(game.elevator_entity is None, "Floor 2 completion retained elevator runtime state.")
+    require(game.creatures == [], "Floor 2 completion retained creature objects.")
+    require(game.doors == [], "Floor 2 completion retained dynamic doors.")
+    require(game.material_pickups == [], "Floor 2 completion retained material objects.")
+    require(len(game.threat_events.active_events) == 0, "Floor 2 completion retained threat events.")
+    require(game.scan_system.active_wave is None, "Floor 2 completion retained active scan wave.")
+    require(game.scan_system.traces == [], "Floor 2 completion retained scan traces.")
+    require(game.snapshot_system.snapshots == [], "Floor 2 completion retained snapshots.")
 
 
 def advance_until(game: Game, predicate, frames: int = 120) -> None:
@@ -542,6 +632,34 @@ def main() -> int:
             + settings.FLOOR_COMPLETION_SCORE,
             "Floor 1 completion score rewards were not applied.",
         )
+        floor1_score = game.placeholder_run.score
+        floor1_materials = dict(game.placeholder_run.material_counts)
+
+        game.perform_action("continue_floor")
+        require(game.state is GameState.FLOOR_TRANSITION, "Continue did not begin Floor 2 transition.")
+        require(game.placeholder_run.floor == 2, "Continue did not set the run floor to Floor 2.")
+        game.update(settings.FLOOR_TRANSITION_DURATION + 0.1)
+        require(game.state is GameState.PLAYING, "Floor 2 transition did not enter PLAYING.")
+        require(game.placeholder_run.generated_floor is not None, "Floor 2 generated floor missing.")
+        require(game.placeholder_run.generated_floor.floor_number == 2, "Generated floor number was not 2.")
+        require(game.placeholder_run.score == floor1_score, "Floor 2 transition did not preserve score.")
+        require(game.placeholder_run.material_counts == floor1_materials, "Floor 2 transition did not preserve materials.")
+        require(game.placeholder_run.completed_floor_count == 1, "Floor 1 completion count was not preserved.")
+        require(game.floor_objectives is not None, "Floor 2 objectives were not created.")
+        require(game.floor_objectives.state.floor_number == 2, "Floor 2 objective state was not active.")
+        require(
+            game.floor_objectives.placement.validation_errors == [],
+            f"Floor 2 objective placement failed validation: {game.floor_objectives.placement.validation_errors}",
+        )
+        require(game.floor_power_available, "Floor 2 should start with runtime power available.")
+        require(len(game.creatures) == 2, "Floor 2 did not create two creatures.")
+        require(len(game.floor_objectives.relays) == 2, "Floor 2 did not create two relay terminals.")
+        require(game.floor_objectives.security_door.state is DoorState.LOCKED, "Floor 2 security door did not start locked.")
+        require(game.elevator_entity is not None, "Floor 2 elevator entity was not created.")
+        require(game.elevator_entity.state is ElevatorState.LOCKED, "Floor 2 elevator did not start locked.")
+
+        freeze_creatures(game)
+        complete_floor2_objective(game)
 
         game.request_quit()
         game.run_one_frame(1.0 / settings.FPS)

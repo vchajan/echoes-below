@@ -16,7 +16,7 @@ Last updated: 2026-06-12
 - [x] Phase 9: Moving invisible creature, dynamic creature snapshots, death and restart.
 - [x] Phase 10: Creature AI, threat events and pathfinding.
 - [x] Phase 11: Floor 1 objective and workshop transition.
-- [ ] Phase 12: Floor 2 security objective.
+- [x] Phase 12: Floor 2 security objective.
 - [ ] Phase 13: Floor 3 Echo Core extraction and victory.
 - [ ] Phase 14: Workshop, recipes and two active module slots.
 - [ ] Phase 15: Shock Pulse and Decoy Beacon.
@@ -492,9 +492,108 @@ Last updated: 2026-06-12
 
 ## Phase 11 Known Limitations
 
-- Workshop crafting remains a placeholder; Continue does not generate Floor 2 yet.
-- Floor 2 security/keycard/relay objectives, Floor 3 containment/Echo Core extraction, active modules and final victory remain future phases.
+- Historical Phase 11 limitation: workshop crafting remained a placeholder and Continue did not generate Floor 2 yet. Phase 12 supersedes the Floor 2 part of this note.
+- Historical Phase 11 limitation: Floor 2 security/keycard/relay objectives were still future work. Phase 12 implements them; Floor 3 containment/Echo Core extraction, active modules and final victory remain future phases.
 - No separate particle pickup-effect system exists yet, so Phase 11 uses contextual messages, scan echoes and close-contact hints for objective feedback.
+- Score values are centralised and functional but not final-balanced.
+
+## Phase 12 Baseline Before Editing
+
+- `python -m unittest discover -s tests`: passed with 327 tests in 40.440s.
+- `python tools/smoke_test.py`: passed.
+- `python tools/generation_test.py`: passed for 450 generated floors, 0 failures, retries used 104, maximum attempt index 4, average attempt index 1.313, average room count 11.816, cycle rank distribution `{1: 150, 2: 300}`, average connectivity ratio 1.000 and total execution time 62.386s.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average raycast 38.701 ms, median 36.683 ms, maximum 67.934 ms, average raw hits 712.4, average deduplicated hits 562.0 and total seconds 3.269.
+- `python tools/floor1_preview.py --seed 12345 --headless`: passed and ended in WORKSHOP with Floor 1 summary preserved and active runtime cleared.
+- `python tools/ai_preview.py --seed 12345 --floor 1 --headless`: passed; transition sequence `PATROL -> INVESTIGATE -> SEARCH -> CHASE -> STUNNED`, threat event IDs `[1]`, pathfinding calls 3, path lengths `{'investigate': 2, 'search': 0, 'chase': 2}`, last known player position `(840.0, 1896.0)`, A* throttled `True` and reset cleaned AI state `True`.
+- `python -m py_compile main.py`: passed.
+
+## Phase 12 Notes
+
+- Added Floor 1 workshop progression into Floor 2 through `FLOOR_TRANSITION`, preserving run seed, score, elapsed time, material counts, restart count and completed-floor summaries while keeping Floor 1 runtime cleared.
+- Floor 2 begins with explicit runtime power active. Normal powered doors can operate, while the selected security door and elevator start locked.
+- Added `Floor2ObjectiveState` and `Floor2ObjectiveSystem` for the authoritative keycard, security door, relay, elevator and contextual-message state.
+- Floor 2 generation now rejects otherwise-valid maps with no gate candidate through the existing bounded deterministic retry loop. Seed `1001` verifies this path by accepting attempt 2.
+- Floor 2 selects one generated security gate, keeps the start/elevator/keycard side public, and places Relay A and Relay B in distinct secure-side rooms.
+- Added the scan-detectable `SecurityKeycardPickup` and `RelayEntity` classes. Keycard collection is collision-based and idempotent; relay activation uses continuous held F, resets on release/range changes and freezes while gameplay is paused.
+- Each relay activation awards score once and emits exactly one strong `RELAY` threat event through the existing threat system.
+- Two creatures are created on Floor 2 and keep the existing AI, pathfinding, line-of-sight, snapshot and death behaviour.
+- Floor 2 completion archives a summary, preserves score/materials, clears Floor 2 runtime entities, scan traces, snapshots and threat events, then returns to WORKSHOP.
+- The one-life rule remains unchanged: a Floor 2 death ends the full run, and Retry Same Seed restarts deterministically from Floor 1.
+- Continue after Floor 2 remains a controlled placeholder notice and does not generate Floor 3.
+
+## Phase 12 Placement Diagnostics
+
+- Seed `12345`, Floor 2: selected gate edge `(7, 8)`.
+- Public-side rooms: `(0, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12)`.
+- Secure-side rooms: `(1, 7)`.
+- Security keycard `f2-a1-keycard-6-38`, room 11, tile `(6, 38)`.
+- Security door `f2-a1-00-security-23-18`, tile `(23, 18)`.
+- Relay A `f2-a1-relay-a-50-8`, room 1, tile `(50, 8)`.
+- Relay B `f2-a1-relay-b-33-9`, room 7, tile `(33, 9)`.
+- Relay activation duration: `2.00`.
+- Relay threat event IDs during preview: `[1, 2]`; strengths `[2.4, 2.4]`.
+- Floor 2 placement validation errors: `[]`.
+
+## Phase 12 Created Or Updated Files
+
+- Created `tests/test_floor2_objectives.py`.
+- Created `tools/floor2_preview.py`.
+- Updated `game/app.py`.
+- Updated `game/settings.py`.
+- Updated `game/states.py`.
+- Updated `game/entities/objectives.py`.
+- Updated `game/entities/door.py`.
+- Updated `game/entities/__init__.py`.
+- Updated `game/systems/floor_objectives.py`.
+- Updated `game/systems/__init__.py`.
+- Updated `game/world/generator.py`.
+- Updated `tools/smoke_test.py`.
+- Updated `README.md`.
+- Updated `IMPLEMENTATION_PLAN.md`.
+- Updated `PROGRESS.md`.
+
+## Phase 12 Test Results
+
+- `python -m unittest discover -s tests`: passed with 347 tests in 54.270s.
+- `python tools/smoke_test.py`: passed.
+- `python tools/generation_test.py`: passed for 450 generated floors, 0 failures, retries used 109, maximum attempt index 5, average attempt index 1.331, average room count 11.829, cycle rank distribution `{1: 150, 2: 300}`, average connectivity ratio 1.000 and total execution time 66.242s.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average raycast 27.551 ms, median 26.703 ms, maximum 43.293 ms, average raw hits 712.9, average deduplicated hits 556.6 and total seconds 2.758.
+- `python tools/floor1_preview.py --seed 12345 --headless`: passed and wrote the existing Floor 1 preview screenshots; final cleanup diagnostics show no generated floor, objectives, power, elevator, generator, player, doors, creatures, materials, threats, scan wave, traces or snapshots active in WORKSHOP.
+- `python tools/floor2_preview.py --seed 12345 --headless`: passed and wrote the Floor 2 preview screenshots listed below.
+- `python tools/ai_preview.py --seed 12345 --floor 2 --headless`: passed; transition sequence `PATROL -> INVESTIGATE -> SEARCH -> CHASE -> STUNNED`, threat event IDs `[1]`, pathfinding calls 3, path lengths `{'investigate': 2, 'search': 0, 'chase': 2}`, last known player position `(312.0, 1848.0)`, A* throttled `True` and reset cleaned AI state `True`.
+- `python -m py_compile main.py`: passed.
+- `python -c "import main; print('main import ok')"`: passed with output `main import ok`.
+- `python -m compileall -q main.py game tests tools`: passed.
+
+## Phase 12 Preview Outputs
+
+- `artifacts/floor2_preview_12345_initial.png`
+- `artifacts/floor2_preview_12345_keycard.png`
+- `artifacts/floor2_preview_12345_keycard_collected.png`
+- `artifacts/floor2_preview_12345_door_unlocked.png`
+- `artifacts/floor2_preview_12345_relay_a_progress.png`
+- `artifacts/floor2_preview_12345_relay_a_active.png`
+- `artifacts/floor2_preview_12345_relay_b_progress.png`
+- `artifacts/floor2_preview_12345_relays_complete.png`
+- `artifacts/floor2_preview_12345_elevator.png`
+- `artifacts/floor2_preview_12345_workshop.png`
+- `artifacts/ai_preview_12345_floor2_patrol.png`
+- `artifacts/ai_preview_12345_floor2_investigate.png`
+- `artifacts/ai_preview_12345_floor2_search.png`
+- `artifacts/ai_preview_12345_floor2_chase.png`
+- `artifacts/ai_preview_12345_floor2_stunned.png`
+
+## Phase 12 Cleanup Diagnostics
+
+- Preserved run summary after Floor 2 preview: last completed floor `2`, completed floor count `2`, score `1100`, materials `{'scrap': 0, 'circuit': 0, 'power_cell': 0}` and Floor 2 summary `{'floor': 2, 'keycard_recovered': True, 'relay_a_active': True, 'relay_b_active': True, 'security_override_completed': True, 'score': 1100, 'materials': {'scrap': 0, 'circuit': 0, 'power_cell': 0}, 'elapsed_time': 0.0}`.
+- Archived pre-cleanup Floor 2 runtime state: keycard collected `True`, security door unlocked `True`, security door state `CLOSED`, Relay A active `True`, Relay B active `True`, elevator unlocked `True`, elevator state `UNLOCKED`, relay threat event IDs `[1, 2]`, relay threat strengths `[2.4, 2.4]` and creature count `2`.
+- Cleared active runtime after Floor 2 preview: generated floor present `False`, floor objectives present `False`, floor power active `False`, elevator entity present `False`, player present `False`, doors count `0`, creatures count `0`, material entity count `0`, threat events count `0`, scan wave active `False`, scan traces count `0`, snapshots count `0` and game state `WORKSHOP`.
+
+## Phase 12 Known Limitations
+
+- Floor 3 containment, Echo Core extraction and victory remain future work.
+- Workshop crafting and active modules remain placeholders.
+- Continue after Floor 2 shows a Floor 3 placeholder notice rather than generating Floor 3.
 - Score values are centralised and functional but not final-balanced.
 
 ## Phase 8 Created Or Updated Files
