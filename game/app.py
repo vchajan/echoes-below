@@ -5,12 +5,15 @@ import pygame
 from game.assets import EFFECT_IMAGE_PATHS, MODULE_ICON_PATHS, AssetManager
 from game.camera import Camera
 from game.entities.door import DoorType, DynamicDoor
+from game.entities.scan_objects import ElevatorEntity, MaterialPickup
 from game.entities.player import Player, movement_direction_from_bools
 from game import settings
 from game.systems.scan import ScanRenderer, ScanSystem
+from game.systems.snapshots import EchoSnapshotRenderer, EchoSnapshotSystem
 from game.states import GameState, PlaceholderRun
 from game.ui.buttons import Button
 from game.world.blockers import DynamicBlockerRegistry
+from game.world.content_generation import FloorContent, create_floor_content
 from game.world.door_generation import create_doors_for_floor
 from game.world.generator import FloorGenerator, GenerationError
 from game.world.rendering import (
@@ -19,6 +22,8 @@ from game.world.rendering import (
     build_local_glow_surface,
     draw_door_debug_overlay,
     draw_doors,
+    draw_floor_content_debug,
+    draw_material_contact_hints,
     draw_camera_debug_overlay,
     draw_debug_overlay,
 )
@@ -41,6 +46,8 @@ class Game:
         self.local_glow_surface = build_local_glow_surface(settings.LOCAL_VISIBILITY_RADIUS)
         self.scan_system = ScanSystem()
         self.scan_renderer = ScanRenderer(settings.WINDOW_SIZE)
+        self.snapshot_system = EchoSnapshotSystem()
+        self.snapshot_renderer = EchoSnapshotRenderer()
         self.performance_overlay = False
         self.last_frame_dt = 0.0
         self.floor_generator = FloorGenerator()
@@ -50,6 +57,9 @@ class Game:
         self.player: Player | None = None
         self.camera: Camera | None = None
         self.doors: list[DynamicDoor] = []
+        self.floor_content: FloorContent | None = None
+        self.material_pickups: list[MaterialPickup] = []
+        self.elevator_entity: ElevatorEntity | None = None
         self.dynamic_blockers = DynamicBlockerRegistry([], settings.TILE_SIZE)
         self.floor_world_surface: pygame.Surface | None = None
         self.floor_preview_surface: pygame.Surface | None = None
@@ -294,6 +304,10 @@ class Game:
                 self.camera = None
                 self.doors = []
                 self.dynamic_blockers.replace_doors([])
+                self.floor_content = None
+                self.material_pickups = []
+                self.elevator_entity = None
+                self.snapshot_system.reset()
                 self.floor_world_surface = None
                 self.floor_preview_surface = None
                 self.scan_system.reset()
@@ -341,10 +355,41 @@ class Game:
 
         for door in self.doors:
             door.update(dt, self.player.collision_rect, floor_powered=self.floor_power_available)
+        if self.floor_content is not None:
+            self.floor_content.update(dt)
 
         self.player.update(direction, dt, self.placeholder_run.generated_floor, self.dynamic_blockers)
         self.camera.update(self.player.world_position, dt)
         self.scan_system.update(dt)
+        self.snapshot_system.update(
+            dt,
+            self.scan_system.last_wave_step,
+            self.scan_detectable_entities(),
+            self.placeholder_run.generated_floor,
+            self.dynamic_blockers,
+            settings.TILE_SIZE,
+        )
+        self.collect_material_pickups()
+
+    def scan_detectable_entities(self) -> list[object]:
+        if self.floor_content is None:
+            return []
+        return self.floor_content.scan_entities
+
+    def collect_material_pickups(self) -> None:
+        if self.player is None or self.placeholder_run is None:
+            return
+        for pickup in self.material_pickups:
+            if not pickup.scan_active or not pickup.collision_rect.colliderect(self.player.collision_rect):
+                continue
+            if not pickup.collect():
+                continue
+            material_name = pickup.material_type.value
+            self.placeholder_run.material_counts[material_name] = (
+                self.placeholder_run.material_counts.get(material_name, 0) + 1
+            )
+            self.placeholder_run.materials_collected += 1
+            self.placeholder_run.score += pickup.score_value
 
     def trigger_scan(self) -> bool:
         if (
@@ -402,12 +447,16 @@ class Game:
         self.camera = None
         self.doors = []
         self.dynamic_blockers.replace_doors([])
+        self.floor_content = None
+        self.material_pickups = []
+        self.elevator_entity = None
         self.floor_power_available = True
         self.floor_world_surface = None
         self.floor_preview_surface = None
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
         self.generation_error = None
         self.scan_system.reset()
+        self.snapshot_system.reset()
         self.world_renderer.clear()
 
     def request_quit(self) -> None:
@@ -415,6 +464,7 @@ class Game:
 
     def prepare_generated_floor(self) -> None:
         self.scan_system.reset()
+        self.snapshot_system.reset()
         if self.placeholder_run is None:
             return
         try:
@@ -429,6 +479,9 @@ class Game:
             self.camera = None
             self.doors = []
             self.dynamic_blockers.replace_doors([])
+            self.floor_content = None
+            self.material_pickups = []
+            self.elevator_entity = None
             self.floor_world_surface = None
             self.floor_preview_surface = None
             return
@@ -450,7 +503,11 @@ class Game:
         )
         self.doors = door_result.doors
         self.dynamic_blockers = door_result.blockers
+        self.floor_content = create_floor_content(generated_floor, self.assets, settings.TILE_SIZE)
+        self.material_pickups = self.floor_content.materials
+        self.elevator_entity = self.floor_content.elevator
         self.scan_system.reset()
+        self.snapshot_system.reset()
 
     def nearest_door(self, door_type: DoorType | None = None) -> DynamicDoor | None:
         if self.player is None:
@@ -578,6 +635,8 @@ class Game:
         generated_floor = self.placeholder_run.generated_floor
         self.world_renderer.render_view(self.screen, generated_floor, self.camera)
         draw_doors(self.screen, self.doors, self.camera)
+        if self.debug_world_view and self.floor_content is not None:
+            draw_floor_content_debug(self.screen, self.floor_content, self.camera, self.fonts["small"])
 
         player_screen_rect = self.camera.world_rect_to_screen(self.player.visual_rect)
         if not self.debug_world_view:
@@ -588,9 +647,17 @@ class Game:
                 player_screen_rect.center,
             )
             self.scan_renderer.render(self.screen, self.scan_system, self.camera)
+            self.snapshot_renderer.render(self.screen, self.snapshot_system.snapshots, self.camera)
+            draw_material_contact_hints(
+                self.screen,
+                self.material_pickups,
+                self.player.world_position,
+                self.camera,
+            )
             self.screen.blit(self.player.image, player_screen_rect)
         else:
             self.scan_renderer.render(self.screen, self.scan_system, self.camera)
+            self.snapshot_renderer.render(self.screen, self.snapshot_system.snapshots, self.camera)
             self.screen.blit(self.player.image, player_screen_rect)
             draw_camera_debug_overlay(
                 self.screen,
@@ -602,12 +669,16 @@ class Game:
             )
             draw_door_debug_overlay(self.screen, self.doors, self.camera, self.fonts["small"])
             self.scan_renderer.render_debug(self.screen, self.scan_system, self.camera, font=self.fonts["small"])
+            self.snapshot_renderer.render_debug(
+                self.screen, self.snapshot_system.snapshots, self.camera, self.fonts["small"]
+            )
             report = generated_floor.validation_report
             if report is not None:
                 debug_lines = [
                     f"Attempt {generated_floor.generation_attempt} | Attempt seed {generated_floor.attempt_seed}",
                     f"Validation {'OK' if report.is_valid else 'FAILED'} | Cycle rank {report.graph_cycle_rank}",
                     f"Connectivity {report.connectivity_ratio:0.3f} | Doors {len(self.doors)} | Power {self.floor_power_available}",
+                    f"Materials {len([p for p in self.material_pickups if p.scan_active])} | Echo snapshots {len(self.snapshot_system.snapshots)}",
                     "F6 nearest door | F7 nearest locked door | F8 power",
                 ]
                 self.draw_text_lines(debug_lines, 16, 112, 24)
@@ -712,6 +783,11 @@ class Game:
             f"World ({self.player.world_position.x:0.1f}, {self.player.world_position.y:0.1f})",
             f"Tile {self.player.current_tile}",
             f"Doors {len(self.doors)} | Power {'ON' if self.floor_power_available else 'OFF'}",
+            (
+                f"Materials S:{self.placeholder_run.material_counts.get('scrap', 0)} "
+                f"C:{self.placeholder_run.material_counts.get('circuit', 0)} "
+                f"P:{self.placeholder_run.material_counts.get('power_cell', 0)} | Score {self.placeholder_run.score}"
+            ),
             "SCAN READY" if self.scan_system.ready else f"SCAN {self.scan_system.cooldown_remaining:0.1f}s",
             f"F2 Debug {'ON' if self.debug_world_view else 'OFF'} | F3 Perf {'ON' if self.performance_overlay else 'OFF'}",
             "Space Scan | Esc Pause",
@@ -737,6 +813,7 @@ class Game:
             f"scan {'active' if wave is not None else 'idle'} | radius {wave.current_radius:0.1f}" if wave else "scan idle",
             f"rays {settings.SCAN_RAY_COUNT} | raw {diagnostics.raw_hit_count} | hits {diagnostics.deduplicated_hit_count}",
             f"traces {len(self.scan_system.traces)} | segments {diagnostics.segments_drawn}",
+            f"object echoes {len(self.snapshot_system.snapshots)} | evaluated {self.snapshot_system.diagnostics.evaluated_entities}",
             f"raycast {diagnostics.last_raycast_ms:0.2f} ms | max {diagnostics.max_raycast_ms:0.2f} ms",
             f"dynamic doors {diagnostics.last_dynamic_door_count}",
         ]

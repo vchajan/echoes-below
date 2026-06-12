@@ -73,6 +73,16 @@ class ScanWave:
             self.active = False
 
 
+
+
+@dataclass(frozen=True)
+class ScanWaveStep:
+    scan_id: int
+    origin: pygame.Vector2
+    previous_radius: float
+    current_radius: float
+    max_radius: float
+
 @dataclass
 class ScanDiagnostics:
     last_raycast_ms: float = 0.0
@@ -93,6 +103,7 @@ class ScanSystem:
         self._revealed_keys: set[tuple[int, int, int, str, str | None]] = set()
         self.threat_events: list[ScanThreatEvent] = []
         self.diagnostics = ScanDiagnostics()
+        self.last_wave_step: ScanWaveStep | None = None
 
     @property
     def ready(self) -> bool:
@@ -164,6 +175,7 @@ class ScanSystem:
 
     def update(self, dt: float) -> None:
         dt = max(0.0, dt)
+        self.last_wave_step = None
         self.cooldown_remaining = max(0.0, self.cooldown_remaining - dt)
 
         for trace in self.traces:
@@ -175,6 +187,13 @@ class ScanSystem:
             return
 
         wave.update_radius(dt)
+        self.last_wave_step = ScanWaveStep(
+            scan_id=wave.scan_id,
+            origin=wave.origin.copy(),
+            previous_radius=wave.previous_radius,
+            current_radius=wave.current_radius,
+            max_radius=wave.max_radius,
+        )
         while wave.pending_index < len(wave.hits):
             hit = wave.hits[wave.pending_index]
             if hit.distance > wave.current_radius + 1e-7:
@@ -199,6 +218,7 @@ class ScanSystem:
         self._revealed_keys.clear()
         self.threat_events.clear()
         self.diagnostics = ScanDiagnostics()
+        self.last_wave_step = None
 
     def _trace_key(self, hit: RayHit) -> tuple[int, int, int, str, str | None]:
         quantum = max(0.5, self.config.dedupe_quantum)

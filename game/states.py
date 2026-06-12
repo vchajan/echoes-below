@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any
 
@@ -25,6 +25,8 @@ class PlaceholderRun:
     elapsed_time: float = 0.0
     restart_count: int = 0
     generated_floor: Any | None = None
+    material_counts: dict[str, int] = field(default_factory=lambda: {"scrap": 0, "circuit": 0, "power_cell": 0})
+    materials_collected: int = 0
 
     def reset_same_seed(self) -> "PlaceholderRun":
         return PlaceholderRun(
@@ -33,4 +35,6 @@ class PlaceholderRun:
             score=0,
             elapsed_time=0.0,
             restart_count=self.restart_count + 1,
+            material_counts={"scrap": 0, "circuit": 0, "power_cell": 0},
+            materials_collected=0,
         )

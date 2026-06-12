@@ -138,6 +138,8 @@ def main() -> int:
         require(game.player is not None, "Player missing in PLAYING.")
         require(game.camera is not None, "Camera missing in PLAYING.")
         require(game.doors, "Dynamic doors were not created.")
+        require(game.material_pickups, "Material pickups were not created.")
+        require(game.elevator_entity is not None, "Elevator entity was not created.")
 
         directions = movement_directions_from_spawn(game)
         require(len(directions) >= 2, "Spawn did not expose two test movement directions.")
@@ -217,6 +219,22 @@ def main() -> int:
         game.transition_to(GameState.PLAYING)
         advance_until(game, lambda: door.is_fully_open)
 
+        pickup = next((item for item in game.material_pickups if item.scan_active), None)
+        require(pickup is not None, "No active material remained for snapshot smoke test.")
+        material_name = pickup.material_type.value
+        place_player_at(game, pickup.tile)
+        while not game.scan_system.ready:
+            game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
+        require(game.trigger_scan(), "Material snapshot scan did not trigger.")
+        game.update_gameplay(0.01, pygame.Vector2(0, 0))
+        require(
+            game.snapshot_system.snapshots_for_source(pickup.unique_id),
+            "Scan did not create a material echo snapshot.",
+        )
+        require(not pickup.scan_active, "Material was not collected on player contact.")
+        require(game.placeholder_run.material_counts[material_name] == 1, "Material counter did not update.")
+        require(game.placeholder_run.score >= settings.MATERIAL_PICKUP_SCORE, "Material score did not update.")
+
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
         game.run_one_frame(1.0 / settings.FPS)
         require(game.state == GameState.PAUSED, "Escape did not pause from PLAYING.")
@@ -238,6 +256,11 @@ def main() -> int:
         require(game.placeholder_run is not None and game.placeholder_run.restart_count == 1, "Restart count was not updated.")
         require(game.scan_system.active_wave is None, "Restart retained an active scan wave.")
         require(not game.scan_system.traces, "Restart retained scan traces.")
+        require(not game.snapshot_system.snapshots, "Restart retained object echo snapshots.")
+        require(
+            game.placeholder_run.material_counts == {"scrap": 0, "circuit": 0, "power_cell": 0},
+            "Restart retained material counters.",
+        )
 
         game.request_quit()
         game.run_one_frame(1.0 / settings.FPS)

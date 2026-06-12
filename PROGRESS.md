@@ -6,16 +6,25 @@ Last updated: 2026-06-12
 
 - [x] Phase 0: Planning documentation, requirements file and repository bootstrap.
 - [x] Phase 1: Minimal Pygame shell, splash screen, automatic menu transition and Play button.
-- [x] Phase 2: Asset manager, spritesheets, tiles, animations and visible score HUD.
-- [x] Phase 3: Seeded room-and-corridor procedural generation with validation.
-- [x] Phase 4: Procedural generator validation, graph loops and safe content placement.
-- [x] Phase 5: Player movement, camera, real-size world rendering and tile collisions.
-- [x] Phase 6: Dynamic doors, blocker interfaces, door collision and door previews.
-- [ ] Phase 7: Fixed-origin scan with occlusion, expansion and fading traces.
-- [ ] Phase 8: Creature movement, collision death and scan snapshots.
-- [ ] Phase 9: Three-floor run flow, floor transitions, death options and victory.
-- [ ] Phase 10: Workshop, materials and active modules.
-- [ ] Phase 11: Performance overlay, debug world view, polish and final requirement pass.
+- [x] Phase 2: Asset manager, spritesheets, tiles and animation support.
+- [x] Phase 3: Seeded room-and-corridor procedural generation.
+- [x] Phase 4: Generator validation, graph loops and safe content candidates.
+- [x] Phase 5: Player movement, camera, world rendering and tile collisions.
+- [x] Phase 6: Dynamic doors and shared blocker interfaces.
+- [x] Phase 7: Fixed-origin scan, DDA occlusion and fading static traces.
+- [x] Phase 8: Generic object echoes, material pickups and elevator scan states.
+- [ ] Phase 9: Moving invisible creature, dynamic creature snapshots, death and restart.
+- [ ] Phase 10: Creature AI, threat events and pathfinding.
+- [ ] Phase 11: Floor 1 objective and workshop transition.
+- [ ] Phase 12: Floor 2 security objective.
+- [ ] Phase 13: Floor 3 Echo Core extraction and victory.
+- [ ] Phase 14: Workshop, recipes and two active module slots.
+- [ ] Phase 15: Shock Pulse and Decoy Beacon.
+- [ ] Phase 16: Door Wedge and Scan Projector.
+- [ ] Phase 17: Final HUD, scoring and presentation effects.
+- [ ] Phase 18: Performance audit and stress testing.
+- [ ] Phase 19: Complete QA and regression repair.
+- [ ] Phase 20: Final documentation, presentation and submission package.
 
 ## Phase 0 Notes
 
@@ -314,3 +323,44 @@ Last updated: 2026-06-12
 - Toggle F2 and inspect sampled rays, hit categories and blocker IDs.
 - Toggle F3 and inspect raycast timing and trace counts.
 - Pause during an active wave and confirm radius, traces and cooldown freeze until resume.
+## Phase 8 Notes
+
+- Added a generic `ScanDetectable` contract and `EchoSnapshotSystem` for fixed world-space object echoes.
+- Object detection occurs only when the expanding wave front overtakes the entity's current distance from the fixed scan origin.
+- Every entity is evaluated at most once per scan. A current line-of-sight test uses the same walls, obstacles and dynamic doors as static DDA raycasting.
+- Captured outlines are copied at detection time, remain stationary, fade independently and are cleaned after expiry. The framework already tracks moving entity distances for the future creature phase.
+- Added deterministic material placement in validated optional rooms: scrap, circuit and power cells. Floor 1 contains three materials, Floor 2 four and Floor 3 five.
+- Material pickups animate internally, remain hidden in normal darkness except for scan echoes and a tiny close-contact hint, collect only once, add +5 score and update per-run material counters.
+- Added a scan-detectable elevator entity with locked, unlocked and active states, state-coloured outlines and an interaction region derived from validated elevator approach tiles.
+- Added F2 full-object diagnostics, F3 object-echo counters, snapshot reset on floor/run cleanup and a dedicated headless preview tool.
+- Current limitations reserved for later phases: no moving creature, creature collision death, objective items, floor progression, crafting or modules.
+
+## Phase 8 Created Or Updated Files
+
+- `game/entities/scan_objects.py`
+- `game/systems/snapshots.py`
+- `game/world/content_generation.py`
+- `game/systems/scan.py`
+- `game/states.py`
+- `game/settings.py`
+- `game/app.py`
+- `game/world/rendering.py`
+- `tests/test_snapshots.py`
+- `tests/test_content.py`
+- `tools/smoke_test.py`
+- `tools/snapshot_preview.py`
+- `README.md`
+- `IMPLEMENTATION_PLAN.md`
+- `PROGRESS.md`
+
+## Phase 8 Test Results
+
+- `python -m unittest discover -s tests`: passed, 216 tests.
+- `python tools/smoke_test.py`: passed, including content creation, object snapshot capture, collection, counters, score and restart cleanup.
+- `python tools/snapshot_preview.py --seed 12345 --floor 1 --headless`: passed.
+- Preview outputs: detected, collected, fading and expired object-echo screenshots under `artifacts/`.
+- Equivalent 450-floor generation stress sweep: passed with 0 failures, maximum attempt index 4, average attempt index 1.313 and connectivity ratio 1.000.
+- Existing player, door and scan headless previews: passed.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average 15.390 ms, median 14.976 ms and maximum 20.859 ms in this container run.
+- `python -m py_compile ...` and `python -c "import main"`: passed.
+
