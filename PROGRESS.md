@@ -15,7 +15,7 @@ Last updated: 2026-06-12
 - [x] Phase 8: Generic object echoes, material pickups and elevator scan states.
 - [x] Phase 9: Moving invisible creature, dynamic creature snapshots, death and restart.
 - [x] Phase 10: Creature AI, threat events and pathfinding.
-- [ ] Phase 11: Floor 1 objective and workshop transition.
+- [x] Phase 11: Floor 1 objective and workshop transition.
 - [ ] Phase 12: Floor 2 security objective.
 - [ ] Phase 13: Floor 3 Echo Core extraction and victory.
 - [ ] Phase 14: Workshop, recipes and two active module slots.
@@ -429,6 +429,73 @@ Last updated: 2026-06-12
 - `python -m py_compile main.py`: passed.
 - `python -c "import main; print('main import ok')"`: passed with output `main import ok`.
 - `python -m compileall -q main.py game tests tools`: passed.
+
+## Phase 11 Baseline Before Editing
+
+- `python -m unittest discover -s tests`: passed with 302 tests in 21.827s.
+- `python tools/smoke_test.py`: passed.
+- `python tools/generation_test.py`: passed for 450 generated floors, 0 failures, retries used 104, maximum attempt index 4, average attempt index 1.313, average room count 11.816, cycle rank distribution `{1: 150, 2: 300}`, average connectivity ratio 1.000 and total execution time 57.990s.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average raycast 30.128 ms, median 29.256 ms, maximum 46.336 ms, average raw hits 712.4, average deduplicated hits 562.0 and total seconds 2.872.
+- `python tools/ai_preview.py --seed 12345 --floor 1 --headless`: passed; transition sequence `PATROL -> INVESTIGATE -> SEARCH -> CHASE -> STUNNED`, threat event IDs `[1]`, pathfinding calls 3, path lengths `{'investigate': 2, 'search': 0, 'chase': 2}`, last known player position `(840.0, 1896.0)`, A* throttled `True` and reset cleaned AI state `True`.
+- `python -m py_compile main.py`: passed.
+
+## Phase 11 Notes
+
+- Added Floor 1 objective content with two deterministic generator components and one generator placed from validated room metadata after materials, doors, creature candidates, player spawn and elevator tiles are reserved.
+- Floor 1 now starts unpowered. Powered doors remain closed until the generator is repaired; security and containment doors remain reserved for later floors.
+- Added `Floor1ObjectiveState` as the authoritative state for component IDs, collection flags, generator progress, repairable/repaired flags, floor power, elevator unlock, completion, prompts, interaction target, contextual messages and generator threat-event ID.
+- Generator components are scan-detectable animated pickups. Collision collection is idempotent, adds +50 score each, updates objective text and preserves already captured historical snapshots until they expire.
+- Generator repair requires both components and continuous held F inside the interaction Rect for 1.5 seconds. Releasing F, leaving range or death resets progress; pause freezes progress because gameplay updates stop outside PLAYING.
+- Generator activation sets the generator to POWERED, sets floor power active, adds +150 score, emits exactly one strong `GENERATOR` threat event, updates powered doors, unlocks the existing elevator entity and updates HUD/objective text.
+- The elevator starts locked and offline. After generator repair, holding F inside the elevator interaction range adds +300 score, clears active Floor 1 runtime objects, scans, snapshots and threat events, and transitions to the WORKSHOP placeholder.
+- The WORKSHOP placeholder now shows `Floor 1 Complete`, `Power restored`, current score, material counts and `Crafting will be enabled in a later phase`. Continue intentionally remains controlled placeholder behaviour and does not generate Floor 2.
+- F2 debug mode includes objective room IDs, positions, generator state/progress, interaction Rect, power/elevator state and threat ID. F3 includes objective stage, components collected, progress, power/elevator state, objective-entity count and generator activation count.
+
+## Phase 11 Placement Diagnostics
+
+- Seed `12345`, Floor 1: Component A `f1-a1-component-a-61-24`, room 3, tile `(61, 24)`.
+- Seed `12345`, Floor 1: Component B `f1-a1-component-b-61-11`, room 5, tile `(61, 11)`.
+- Seed `12345`, Floor 1: Generator `f1-a1-generator-37-36`, room 2, tile `(37, 36)`.
+- Placement validation errors: `[]`.
+- Repair duration: `1.50`.
+- Generator threat event ID during preview: `1`; Floor 1 completion cleanup left 0 generator threat events active in WORKSHOP.
+
+## Phase 11 Created Or Updated Files
+
+- `game/entities/objectives.py`
+- `game/systems/floor_objectives.py`
+- `tests/test_floor1_objectives.py`
+- `tools/floor1_preview.py`
+- `game/app.py`
+- `game/settings.py`
+- `game/entities/__init__.py`
+- `game/systems/__init__.py`
+- `tools/smoke_test.py`
+- `README.md`
+- `IMPLEMENTATION_PLAN.md`
+- `PROGRESS.md`
+
+## Phase 11 Test Results
+
+- `python -m unittest discover -s tests`: passed with 327 tests in 40.134s.
+- `python tools/smoke_test.py`: passed.
+- `python tools/generation_test.py`: passed for 450 generated floors, 0 failures, retries used 104, maximum attempt index 4, average attempt index 1.313, average room count 11.816, cycle rank distribution `{1: 150, 2: 300}`, average connectivity ratio 1.000 and total execution time 70.898s.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average raycast 26.107 ms, median 24.854 ms, maximum 39.565 ms, average raw hits 712.4, average deduplicated hits 562.0 and total seconds 2.691.
+- `python tools/snapshot_preview.py --seed 12345 --floor 1 --headless`: passed and wrote detected, collected, fading and expired previews; pickup `f1-a1-material-00-power_cell-17-40`, material counts `{'scrap': 0, 'circuit': 0, 'power_cell': 1}`, score 5 and active snapshots ended at 0.
+- `python tools/creature_preview.py --seed 12345 --floor 1 --headless`: passed and wrote debug, before-scan, snapshot, moved and death previews; creature spawn `(18, 41)`, moved tile `(19, 41)`, snapshot position `(888.0, 1992.0)`, creature position `(936.0, 1992.0)`, scan ID 1, snapshot count 1 and snapshot stationary `True`.
+- `python tools/ai_preview.py --seed 12345 --floor 1 --headless`: passed and wrote PATROL, INVESTIGATE, SEARCH, CHASE and STUNNED previews; transition sequence `PATROL -> INVESTIGATE -> SEARCH -> CHASE -> STUNNED`, threat event IDs `[1]`, pathfinding calls 3, path lengths `{'investigate': 2, 'search': 0, 'chase': 2}`, last known player position `(840.0, 1896.0)`, A* throttled `True` and reset cleaned AI state `True`.
+- `python tools/floor1_preview.py --seed 12345 --headless`: passed and wrote `artifacts/floor1_preview_12345_initial.png`, `artifacts/floor1_preview_12345_component1.png`, `artifacts/floor1_preview_12345_components_complete.png`, `artifacts/floor1_preview_12345_repairing.png`, `artifacts/floor1_preview_12345_powered.png`, `artifacts/floor1_preview_12345_elevator.png` and `artifacts/floor1_preview_12345_workshop.png`; summary score 550, completed floor count 1, materials `{'scrap': 0, 'circuit': 0, 'power_cell': 0}` and game state `WORKSHOP`.
+- Final workshop runtime cleanup diagnostics from `tools/floor1_preview.py --seed 12345 --headless`: `runtime_generated_floor_present=False`, `runtime_floor_objectives_present=False`, `runtime_floor_power_active=False`, `runtime_elevator_entity_present=False`, `runtime_generator_entity_present=False`, `runtime_player_present=False`, `runtime_doors_count=0`, `runtime_creatures_count=0`, `runtime_material_entities_count=0`, `runtime_threat_events_count=0`, `runtime_generator_threats_count=0`, `runtime_scan_wave_active=False`, `runtime_scan_traces_count=0` and `runtime_snapshots_count=0`.
+- `python -m py_compile main.py`: passed.
+- `python -c "import main; print('main import ok')"`: passed with output `main import ok`.
+- `python -m compileall -q main.py game tests tools`: passed.
+
+## Phase 11 Known Limitations
+
+- Workshop crafting remains a placeholder; Continue does not generate Floor 2 yet.
+- Floor 2 security/keycard/relay objectives, Floor 3 containment/Echo Core extraction, active modules and final victory remain future phases.
+- No separate particle pickup-effect system exists yet, so Phase 11 uses contextual messages, scan echoes and close-contact hints for objective feedback.
+- Score values are centralised and functional but not final-balanced.
 
 ## Phase 8 Created Or Updated Files
 

@@ -24,6 +24,7 @@ class PlaceholderRun:
     score: int = 0
     elapsed_time: float = 0.0
     restart_count: int = 0
+    completed_floor_count: int = 0
     generated_floor: Any | None = None
     material_counts: dict[str, int] = field(default_factory=lambda: {"scrap": 0, "circuit": 0, "power_cell": 0})
     materials_collected: int = 0
@@ -35,6 +36,7 @@ class PlaceholderRun:
             score=0,
             elapsed_time=0.0,
             restart_count=self.restart_count + 1,
+            completed_floor_count=0,
             material_counts={"scrap": 0, "circuit": 0, "power_cell": 0},
             materials_collected=0,
         )

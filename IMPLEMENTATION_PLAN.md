@@ -81,9 +81,10 @@ Doors are rendered separately from the cached static floor surface. The static t
 9. Phase 8: generic object echoes, materials and elevator scan states.
 10. Phase 9: moving invisible creature, dynamic creature echoes, death and restart.
 11. Phase 10: threat-aware creature AI and pathfinding.
-12. Phases 11-13: three floor objectives, extraction and victory.
-13. Phases 14-16: workshop, recipes and four active modules.
-14. Phases 17-20: HUD/effects, performance, QA and submission documentation.
+12. Phase 11: Floor 1 restore-power objective, generator repair, power activation, elevator completion and controlled workshop transition.
+13. Phases 12-13: Floor 2 security objective, Floor 3 extraction and victory.
+14. Phases 14-16: workshop, recipes and four active modules.
+15. Phases 17-20: HUD/effects, performance, QA and submission documentation.
 
 ## Automated Tests
 
@@ -137,9 +138,19 @@ Static geometry is raycast once when Space is pressed, never every frame. The ac
 
 ## Phase 10 Creature AI Architecture Notes
 
-- `game/systems/threat_events.py` owns temporary sound/disturbance events. It supports all planned source types, but only `PLAYER_SCAN` currently creates active gameplay events.
+- `game/systems/threat_events.py` owns temporary sound/disturbance events. It supports all planned source types; active gameplay events currently come from `PLAYER_SCAN` and Phase 11 `GENERATOR` activation.
 - `game/systems/creature_ai.py` owns the `CreatureState` enum, state transitions, timers, selected threat, patrol/investigation/search/chase targets, last-known player memory, stun state, perception cadence and pathfinding diagnostics.
 - `game/world/navigation.py` now contains deterministic four-directional A* helpers that respect static floor walkability and `DynamicBlockerRegistry` door semantics.
 - `Creature` remains responsible for physical position, animation, collision Rects, bounded movement and scan outlines. It delegates decision-making only when an AI object is attached.
 - `Game` owns one shared `ThreatEventSystem`, creates per-creature deterministic AI instances during floor preparation, emits exactly one `PLAYER_SCAN` event after a successful fixed-origin scan, and clears AI/threat state on retry, new run, main menu and floor cleanup.
 - F2 and F3 read existing AI diagnostics. They do not perform extra pathfinding or alter gameplay state.
+
+## Phase 11 Floor Objective Architecture Notes
+
+- `game/entities/objectives.py` defines the scan-detectable generator components and generator entity. These own stable IDs, room/tile metadata, cached animations, collision/interaction Rects and outline capture without knowing about run state.
+- `game/systems/floor_objectives.py` owns `Floor1ObjectiveState`, deterministic placement, validation metadata, component collection, hold-F repair progress, contextual messages, generator activation and elevator completion results.
+- `Game.prepare_generated_floor` creates Floor 1 objective content once after static content and doors exist. It reserves material, door, creature, spawn and elevator tiles so objectives do not overlap existing content.
+- Objective placement uses existing generated room-distance groups and deterministic candidate ordering. Reachability checks use `navigation.astar_path` with `BlockerPurpose.MOVEMENT`, so components and the generator must be reachable while Floor 1 powered doors are still closed.
+- `Game.update_gameplay` passes continuous F-state into the objective system after scan snapshots are evaluated, preserving historical component echoes before collision pickup removes the source entity.
+- Generator repair emits exactly one strong `GENERATOR` threat event through `ThreatEventSystem`, sets Floor 1 power active, updates powered doors, unlocks the existing elevator entity and leaves security/containment doors for later phases.
+- Floor completion clears floor runtime objects, scans, snapshots, objectives, doors, creatures and threat events while preserving run-level seed, score, elapsed time, restart count and material counters for the WORKSHOP placeholder.
