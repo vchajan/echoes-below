@@ -10,11 +10,12 @@ Last updated: 2026-06-12
 - [x] Phase 3: Seeded room-and-corridor procedural generation with validation.
 - [x] Phase 4: Procedural generator validation, graph loops and safe content placement.
 - [x] Phase 5: Player movement, camera, real-size world rendering and tile collisions.
-- [ ] Phase 6: Fixed-origin scan with occlusion, expansion and fading traces.
-- [ ] Phase 7: Creature movement, collision death and scan snapshots.
-- [ ] Phase 8: Three-floor run flow, floor transitions, death options and victory.
-- [ ] Phase 9: Workshop, materials and active modules.
-- [ ] Phase 10: Performance overlay, debug world view, polish and final requirement pass.
+- [x] Phase 6: Dynamic doors, blocker interfaces, door collision and door previews.
+- [ ] Phase 7: Fixed-origin scan with occlusion, expansion and fading traces.
+- [ ] Phase 8: Creature movement, collision death and scan snapshots.
+- [ ] Phase 9: Three-floor run flow, floor transitions, death options and victory.
+- [ ] Phase 10: Workshop, materials and active modules.
+- [ ] Phase 11: Performance overlay, debug world view, polish and final requirement pass.
 
 ## Phase 0 Notes
 
@@ -184,3 +185,71 @@ Last updated: 2026-06-12
 - Toggle F2 and confirm debug overlays follow the camera and player.
 - Pause and resume.
 - Restart the run from pause and confirm the player returns to the regenerated Floor 1 session.
+
+## Phase 6 Notes
+
+- Added dynamic door entities with one shared implementation for powered, security and containment doors.
+- Added the central `DoorState` enum with `LOCKED`, `CLOSED`, `OPENING`, `OPEN`, `CLOSING`, `WEDGED_OPEN` and `WEDGED_CLOSED`.
+- Added cached door animation usage, orientation-aware door sprites, approach rectangles, collision rectangles, interaction rectangles and stable door IDs.
+- Added automatic powered-door opening and safe delayed closing. Doors do not close while the player occupies the approach area or doorway.
+- Added explicit security and containment unlock APIs. Security and containment doors start locked; after unlock they behave like powered automatic doors.
+- Added wedge-ready APIs for direct tests. Door Wedge gameplay, inventory, cooldown and module activation remain future work.
+- Added a dynamic blocker registry for movement, future creature movement, future scan and future line-of-sight queries.
+- Integrated dynamic door blockers into player collision without modifying the static tile grid.
+- Added deterministic door generation from validated doorway metadata. Floor 1 uses only powered doors for current preview playability. Floor 2 selects one deterministic security-door candidate. Floor 3 selects one deterministic containment-door candidate.
+- Added F2 debug door rendering with door ID, type, state, orientation, approach rect, collision rect, movement blocking, scan blocking, power and lock status.
+- Added debug-only F6/F7/F8 controls while F2 is active: nearest door toggle, nearest locked-door toggle and temporary floor-power toggle.
+- Current limitations reserved for later phases: no scan raycasting, creatures, AI, final objectives, materials, crafting, modules, score expansion or Door Wedge gameplay.
+
+## Phase 6 Created Or Updated Files
+
+- `game/entities/door.py`
+- `game/entities/__init__.py`
+- `game/world/blockers.py`
+- `game/world/navigation.py`
+- `game/world/door_generation.py`
+- `game/world/collision.py`
+- `game/world/rendering.py`
+- `game/entities/player.py`
+- `game/assets.py`
+- `game/app.py`
+- `game/settings.py`
+- `tests/test_doors.py`
+- `tests/test_dynamic_blockers.py`
+- `tests/test_door_generation.py`
+- `tools/smoke_test.py`
+- `tools/door_preview.py`
+- `README.md`
+- `IMPLEMENTATION_PLAN.md`
+- `PROGRESS.md`
+
+## Phase 6 Test Results
+
+- Baseline before editing: `python tools/generate_placeholder_assets.py`, `python -m unittest discover -s tests`, `python tools/smoke_test.py`, `python tools/generation_test.py`, `python tools/player_preview.py --seed 12345 --headless` and `python -m py_compile main.py` all passed.
+- `python tools/generate_placeholder_assets.py`: passed.
+- `python -m unittest discover -s tests`: passed, 161 tests.
+- `python tools/smoke_test.py`: passed.
+- `python tools/generation_test.py`: passed for 450 generated floors.
+- `python tools/player_preview.py --seed 12345 --headless`: passed.
+- `python tools/door_preview.py --seed 12345 --floor 2 --headless`: passed.
+- `python -m py_compile main.py`: passed.
+- `python -c "import main; print('main import ok')"`: passed.
+- Door previews confirmed at `artifacts/door_preview_12345_floor2_closed.png` and `artifacts/door_preview_12345_floor2_open.png`.
+
+## Phase 6 Manual Checklist
+
+- Run `python main.py`.
+- Start New Run.
+- Walk toward a powered door.
+- Verify it opens.
+- Stand in the doorway.
+- Verify it does not close.
+- Leave the doorway.
+- Verify it closes.
+- Walk into the closed door.
+- Verify collision blocks movement.
+- Toggle F2.
+- Inspect door type, state and blocker values.
+- Pause during animation.
+- Resume and verify animation continues correctly.
+- Restart and verify new door instances exist.

@@ -80,7 +80,7 @@ class Player(pygame.sprite.Sprite):
         self._update_facing(direction)
         return direction
 
-    def update(self, direction: pygame.Vector2, dt: float, generated_floor) -> None:
+    def update(self, direction: pygame.Vector2, dt: float, generated_floor, dynamic_blockers=None) -> None:
         direction = self.set_movement_direction(direction)
         self.moving = direction.length_squared() > 0
         next_state = "walk" if self.moving else "idle"
@@ -90,7 +90,7 @@ class Player(pygame.sprite.Sprite):
 
         if self.moving:
             movement = direction * self.speed * dt
-            self._move_with_substeps(movement, generated_floor)
+            self._move_with_substeps(movement, generated_floor, dynamic_blockers)
 
         self.animations[self.animation_key].update(dt if self.moving else 0.0)
         old_center = self.visual_rect.center
@@ -99,19 +99,26 @@ class Player(pygame.sprite.Sprite):
         self.rect = self.visual_rect
         self._sync_rects_from_world()
 
-    def _move_with_substeps(self, movement: pygame.Vector2, generated_floor) -> None:
+    def _move_with_substeps(self, movement: pygame.Vector2, generated_floor, dynamic_blockers=None) -> None:
         distance = movement.length()
         if distance <= 0:
             return
         steps = max(1, min(settings.MOVEMENT_MAX_SUBSTEPS, math.ceil(distance / settings.MOVEMENT_SUBSTEP_MAX)))
         step = movement / steps
         for _ in range(steps):
-            self._move_single_step(step, generated_floor)
+            self._move_single_step(step, generated_floor, dynamic_blockers)
 
-    def _move_single_step(self, movement: pygame.Vector2, generated_floor) -> None:
+    def _move_single_step(self, movement: pygame.Vector2, generated_floor, dynamic_blockers=None) -> None:
         if movement.x:
             candidate = self.collision_rect.copy()
-            candidate, collided = collision.resolve_axis(candidate, movement.x, "x", generated_floor, self.tile_size)
+            candidate, collided = collision.resolve_axis(
+                candidate,
+                movement.x,
+                "x",
+                generated_floor,
+                self.tile_size,
+                dynamic_blockers,
+            )
             if not collided:
                 self.world_position.x += movement.x
             else:
@@ -121,7 +128,14 @@ class Player(pygame.sprite.Sprite):
 
         if movement.y:
             candidate = self.collision_rect.copy()
-            candidate, collided = collision.resolve_axis(candidate, movement.y, "y", generated_floor, self.tile_size)
+            candidate, collided = collision.resolve_axis(
+                candidate,
+                movement.y,
+                "y",
+                generated_floor,
+                self.tile_size,
+                dynamic_blockers,
+            )
             if not collided:
                 self.world_position.y += movement.y
             else:

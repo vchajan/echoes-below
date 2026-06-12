@@ -57,6 +57,17 @@ Planned structure:
 
 Data flows from input events into the current state, then into player/module actions, world/objective updates, creature updates, collision checks, score updates and rendering. Rendering reads state only; it does not load assets or perform expensive generation.
 
+## Current Architecture Notes
+
+The implemented project uses the `game/` package rather than the early `src/` placeholder tree. Phase 6 door and blocker code lives in:
+
+- `game/entities/door.py`: dynamic door type, state, animation, timers, collision and lock/wedge APIs.
+- `game/world/blockers.py`: dynamic blocker registry for movement, future scan, future line of sight and future creature navigation queries.
+- `game/world/door_generation.py`: deterministic conversion from validated doorway metadata to dynamic doors.
+- `game/world/navigation.py`: small future-facing navigation helpers.
+
+Doors are rendered separately from the cached static floor surface. The static tile grid remains walkable at doorway tiles; closed or locked doors provide temporary dynamic blockers instead of rewriting tile data.
+
 ## Implementation Order
 
 1. Phase 0: create planning docs, requirements and Git checkpoint.

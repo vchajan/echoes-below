@@ -6,6 +6,7 @@ import pygame
 
 from game.assets import AssetManager
 from game.camera import Camera
+from game.entities.door import DynamicDoor
 from game.entities.player import Player
 from game.world.floor import GeneratedFloor
 from game.world import collision
@@ -117,6 +118,52 @@ def apply_darkness(
     glow_rect = glow_surface.get_rect(center=player_screen_center)
     darkness_surface.blit(glow_surface, glow_rect, special_flags=pygame.BLEND_RGBA_SUB)
     target.blit(darkness_surface, (0, 0))
+
+
+def draw_doors(
+    surface: pygame.Surface,
+    doors: list[DynamicDoor],
+    camera: Camera,
+) -> None:
+    screen_rect = surface.get_rect()
+    for door in doors:
+        rect = camera.world_rect_to_screen(door.visual_rect)
+        if screen_rect.colliderect(rect):
+            surface.blit(door.image, rect)
+
+
+def draw_door_debug_overlay(
+    surface: pygame.Surface,
+    doors: list[DynamicDoor],
+    camera: Camera,
+    font: pygame.font.Font | None = None,
+) -> None:
+    screen_rect = surface.get_rect()
+    for door in doors:
+        collision_rect = camera.world_rect_to_screen(door.collision_rect)
+        approach_rect = camera.world_rect_to_screen(door.approach_rect)
+        if not screen_rect.colliderect(approach_rect) and not screen_rect.colliderect(collision_rect):
+            continue
+
+        movement_color = (255, 96, 96) if door.blocks_player else (118, 241, 173)
+        scan_color = (255, 220, 80) if door.blocks_scan else (72, 226, 255)
+        pygame.draw.rect(surface, (72, 226, 255), approach_rect, 1)
+        pygame.draw.rect(surface, movement_color, collision_rect, 2)
+        pygame.draw.circle(
+            surface,
+            scan_color,
+            tuple(round(value) for value in camera.world_to_screen(door.world_center)),
+            4,
+        )
+
+        if font is not None:
+            label = (
+                f"{door.door_id} {door.door_type.value} {door.state.value} "
+                f"{door.orientation} move:{int(door.blocks_player)} scan:{int(door.blocks_scan)} "
+                f"power:{int(door.powered)} lock:{int(door.is_locked)}"
+            )
+            image = font.render(label, True, (221, 235, 232))
+            surface.blit(image, (collision_rect.left, max(0, collision_rect.top - 18)))
 
 
 def draw_debug_overlay(

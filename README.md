@@ -2,7 +2,7 @@
 
 Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is currently in Phase 5. It contains the application shell, state system, asset manager, generated placeholder spritesheets, seeded procedural floor generation, stronger generator validation, player movement, a camera-driven playable world view, tile collisions, tests and headless verification tools. Scan raycasting, creatures, objectives, materials, crafting, modules and scoring are planned for later phases.
+This repository is currently in Phase 6. It contains the application shell, state system, asset manager, generated placeholder spritesheets, seeded procedural floor generation, stronger generator validation, player movement, a camera-driven playable world view, tile collisions, dynamic doors, blocker interfaces, tests and headless verification tools. Scan raycasting, creatures, objectives, materials, crafting, modules and scoring are planned for later phases.
 
 ## Setup
 
@@ -31,6 +31,7 @@ python main.py
 - Escape: skip splash, pause during PLAYING, resume from pause or return from How to Play
 - Backspace: return from How to Play
 - F2: toggle the camera-space debug overlay during PLAYING
+- F6/F7/F8: door debug controls, only while F2 debug mode is active
 
 Planned gameplay controls:
 
@@ -55,6 +56,7 @@ python tools/generation_preview.py --seed 12345 --floor 1 --headless
 python tools/generation_preview.py --seed 12345 --floor 2 --headless
 python tools/generation_preview.py --seed 12345 --floor 3 --headless
 python tools/player_preview.py --seed 12345 --headless
+python tools/door_preview.py --seed 12345 --floor 2 --headless
 python -m py_compile main.py
 python -c "import main; print('main import ok')"
 ```
@@ -114,6 +116,26 @@ Normal PLAYING mode is intentionally dark as a temporary Phase 5 visibility stan
 
 F2 debug mode disables the heavy darkness and draws camera-space diagnostics: tile grid, room boundaries and IDs, graph links, doorway candidates, creature candidates, objective candidates, spawn/elevator markers, player visual rect, player collision rect and current tile.
 
+## Dynamic Doors
+
+Phase 6 creates dynamic door entities from validated doorway metadata without changing the static tile grid. Doors render separately from the cached floor surface and supply temporary blockers for movement, future scan raycasting, line of sight and future creature navigation.
+
+Door types:
+
+- Powered doors are automatic doors. They open when the player enters the approach area while floor power is available, stay open while the approach or doorway is occupied, and close after a delay when clear.
+- Security doors start locked, block movement and future scan, and expose an unlock API. Once unlocked, they behave like powered automatic doors.
+- Containment doors start locked, remain distinct from security doors, expose a containment unlock API, and then behave as heavier powered doors.
+
+Temporary Phase 6 behavior: Floor 1 uses powered doors only so the current playable preview remains traversable. Floor 2 exposes a deterministic security-door candidate, and Floor 3 exposes a containment-door candidate for later objective phases.
+
+Closed, locked, opening, closing and wedged-closed doors block player movement, future scan, future line of sight and future creature navigation. Open and wedged-open doors block none of those purposes. Closing begins only after the doorway is clear, so doors do not push or trap the player.
+
+Debug controls are active only in F2 mode:
+
+- F6: toggle the nearest door open or closed.
+- F7: toggle the nearest security or containment door locked or unlocked.
+- F8: toggle temporary floor power.
+
 Validation now checks walkable connectivity, elevator reachability, graph connectivity, graph cycle rank, safe player/elevator placement, obstacle connectivity, doorway validity, corridor continuity and future content candidates. Floor 2 and Floor 3 require at least one graph cycle. Floor 3 prefers two loops when room count allows it.
 
 Current floor profiles:
@@ -155,6 +177,15 @@ python tools/player_preview.py --seed 12345 --headless
 ```
 
 Headless mode saves `artifacts/player_preview_12345_start.png` and `artifacts/player_preview_12345_moved.png`.
+
+Preview door animation, collision and debug information with:
+
+```powershell
+python tools/door_preview.py --seed 12345 --floor 2
+python tools/door_preview.py --seed 12345 --floor 2 --headless
+```
+
+Headless mode saves `artifacts/door_preview_12345_floor2_closed.png` and `artifacts/door_preview_12345_floor2_open.png`.
 
 Run the Phase 4 stress test with:
 

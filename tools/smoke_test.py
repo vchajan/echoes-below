@@ -13,8 +13,10 @@ import pygame
 
 from game import settings
 from game.app import Game
+from game.entities.door import DoorState, DoorType, DynamicDoor
 from game.states import GameState
 from game.world import collision
+from game.world.blockers import BlockerPurpose
 
 
 def require(condition: bool, message: str) -> None:
@@ -62,6 +64,62 @@ def find_walkable_tile_next_to_blocker(game: Game) -> tuple[tuple[int, int], pyg
     raise AssertionError("Could not find a walkable tile next to a blocker.")
 
 
+def find_powered_door(game: Game) -> DynamicDoor:
+    for door in game.doors:
+        if door.door_type is DoorType.POWERED:
+            return door
+    raise AssertionError("No powered door exists in the generated session.")
+
+
+def tile_rect(tile: tuple[int, int]) -> pygame.Rect:
+    return collision.tile_to_world_rect(tile[0], tile[1], settings.TILE_SIZE)
+
+
+def approach_tile_for_door(game: Game, door: DynamicDoor) -> tuple[int, int]:
+    require(game.placeholder_run is not None, "Run was not created.")
+    floor = game.placeholder_run.generated_floor
+    require(floor is not None, "Floor was not generated.")
+
+    candidates = (
+        [(door.tile[0] - 1, door.tile[1]), (door.tile[0] + 1, door.tile[1])]
+        if door.orientation == "vertical_door_plane"
+        else [(door.tile[0], door.tile[1] - 1), (door.tile[0], door.tile[1] + 1)]
+    )
+    for tile in candidates:
+        if floor.is_walkable(*tile) and door.approach_rect.colliderect(tile_rect(tile)):
+            return tile
+    for tile in floor.walkable_tiles():
+        if tile != door.tile and door.approach_rect.colliderect(tile_rect(tile)):
+            return tile
+    raise AssertionError("Could not find a walkable approach tile for the door.")
+
+
+def clear_tile_for_door(game: Game, door: DynamicDoor) -> tuple[int, int]:
+    require(game.placeholder_run is not None, "Run was not created.")
+    floor = game.placeholder_run.generated_floor
+    require(floor is not None, "Floor was not generated.")
+    for tile in floor.walkable_tiles():
+        rect = tile_rect(tile)
+        if tile != door.tile and not door.approach_rect.colliderect(rect) and not door.collision_rect.colliderect(rect):
+            return tile
+    raise AssertionError("Could not find a clear tile away from the door.")
+
+
+def place_player_at(game: Game, tile: tuple[int, int]) -> None:
+    require(game.player is not None, "Player was not created.")
+    require(game.camera is not None, "Camera was not created.")
+    game.player.place_at_tile(tile)
+    game.camera.update(game.player.world_position)
+
+
+def advance_until(game: Game, predicate, frames: int = 120) -> None:
+    for _ in range(frames):
+        game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
+        if predicate():
+            return
+    raise AssertionError("Timed out waiting for expected gameplay condition.")
+
+
 def main() -> int:
     game = Game()
     try:
@@ -79,6 +137,7 @@ def main() -> int:
         require(game.placeholder_run.generated_floor is not None, "Generated floor missing in PLAYING.")
         require(game.player is not None, "Player missing in PLAYING.")
         require(game.camera is not None, "Camera missing in PLAYING.")
+        require(game.doors, "Dynamic doors were not created.")
 
         directions = movement_directions_from_spawn(game)
         require(len(directions) >= 2, "Spawn did not expose two test movement directions.")
@@ -113,6 +172,28 @@ def main() -> int:
         game.handle_keydown(pygame.K_F2)
         require(not game.debug_world_view, "F2 did not disable debug mode.")
 
+        door = find_powered_door(game)
+        place_player_at(game, approach_tile_for_door(game, door))
+        game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
+        require(door.state in (DoorState.OPENING, DoorState.OPEN), "Powered door did not begin opening on approach.")
+        advance_until(game, lambda: door.is_fully_open)
+        require(not game.dynamic_blockers.blocks_tile(*door.tile, BlockerPurpose.MOVEMENT), "Open door still blocks movement.")
+
+        place_player_at(game, clear_tile_for_door(game, door))
+        advance_until(game, lambda: door.state is DoorState.CLOSED, frames=180)
+        require(game.dynamic_blockers.blocks_tile(*door.tile, BlockerPurpose.MOVEMENT), "Closed door did not block movement.")
+
+        place_player_at(game, approach_tile_for_door(game, door))
+        game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
+        require(door.state is DoorState.OPENING, "Door did not enter opening for pause test.")
+        opening_frame = door.animation_frame_index
+        game.transition_to(GameState.PAUSED)
+        game.update(1.0)
+        require(door.state is DoorState.OPENING, "Door state changed while paused.")
+        require(door.animation_frame_index == opening_frame, "Door animation advanced while paused.")
+        game.transition_to(GameState.PLAYING)
+        advance_until(game, lambda: door.is_fully_open)
+
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
         game.run_one_frame(1.0 / settings.FPS)
         require(game.state == GameState.PAUSED, "Escape did not pause from PLAYING.")
@@ -123,12 +204,14 @@ def main() -> int:
 
         old_player = game.player
         old_camera = game.camera
+        old_doors = list(game.doors)
         game.transition_to(GameState.PAUSED)
         game.selected_indices[GameState.PAUSED] = 1
         game.activate_selected_button()
         require(game.state == GameState.PLAYING, "Restart Run did not return to PLAYING.")
         require(game.player is not None and game.player is not old_player, "Restart did not create a fresh player.")
         require(game.camera is not None and game.camera is not old_camera, "Restart did not create a fresh camera.")
+        require(game.doors and all(door not in game.doors for door in old_doors), "Restart did not create fresh doors.")
         require(game.placeholder_run is not None and game.placeholder_run.restart_count == 1, "Restart count was not updated.")
 
         game.request_quit()

@@ -257,6 +257,7 @@ class AssetManager:
         self._outline_cache: dict[tuple[str, str, int, tuple[int, int, int, int]], list[pygame.Surface]] = {}
         self._image_outline_cache: dict[tuple[str, int, tuple[int, int, int, int]], pygame.Surface] = {}
         self._flipped_cache: dict[tuple[str, str], list[pygame.Surface]] = {}
+        self._rotated_cache: dict[tuple[str, str, int], list[pygame.Surface]] = {}
         self._sound_cache: dict[str, PlayableSound] = {}
         self._warned_missing: set[str] = set()
 
@@ -375,6 +376,14 @@ class AssetManager:
                 pygame.transform.flip(frame, True, False) for frame in self.get_frames(sheet_name, animation_name)
             ]
         return self._flipped_cache[key]
+
+    def get_rotated_frames(self, sheet_name: str, animation_name: str, angle: int) -> list[pygame.Surface]:
+        key = (sheet_name, animation_name, angle)
+        if key not in self._rotated_cache:
+            self._rotated_cache[key] = [
+                pygame.transform.rotate(frame, angle) for frame in self.get_frames(sheet_name, animation_name)
+            ]
+        return self._rotated_cache[key]
 
     def load_sound(self, sound_name: str) -> PlayableSound:
         if sound_name in self._sound_cache:

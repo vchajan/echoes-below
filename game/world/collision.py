@@ -42,12 +42,27 @@ def blocking_rects_for_rect(generated_floor, rect: pygame.Rect, tile_size: int) 
     return blockers
 
 
+def all_blocking_rects_for_rect(
+    generated_floor,
+    rect: pygame.Rect,
+    tile_size: int,
+    dynamic_blockers=None,
+    purpose: object = "movement",
+) -> list[pygame.Rect]:
+    blockers = blocking_rects_for_rect(generated_floor, rect, tile_size)
+    if dynamic_blockers is not None:
+        blockers.extend(dynamic_blockers.blocked_rects_for_rect(rect, purpose))
+    return blockers
+
+
 def resolve_axis(
     rect: pygame.Rect,
     delta: float,
     axis: str,
     generated_floor,
     tile_size: int,
+    dynamic_blockers=None,
+    purpose: object = "movement",
 ) -> tuple[pygame.Rect, bool]:
     moved = rect.copy()
     if axis == "x":
@@ -58,7 +73,7 @@ def resolve_axis(
         raise ValueError("axis must be 'x' or 'y'")
 
     collided = False
-    for blocker in blocking_rects_for_rect(generated_floor, moved, tile_size):
+    for blocker in all_blocking_rects_for_rect(generated_floor, moved, tile_size, dynamic_blockers, purpose):
         if not moved.colliderect(blocker):
             continue
         collided = True

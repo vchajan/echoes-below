@@ -4,15 +4,20 @@ import pygame
 
 from game.assets import EFFECT_IMAGE_PATHS, MODULE_ICON_PATHS, AssetManager
 from game.camera import Camera
+from game.entities.door import DoorType, DynamicDoor
 from game.entities.player import Player, movement_direction_from_bools
 from game import settings
 from game.states import GameState, PlaceholderRun
 from game.ui.buttons import Button
+from game.world.blockers import DynamicBlockerRegistry
+from game.world.door_generation import create_doors_for_floor
 from game.world.generator import FloorGenerator, GenerationError
 from game.world.rendering import (
     StaticWorldRenderer,
     apply_darkness,
     build_local_glow_surface,
+    draw_door_debug_overlay,
+    draw_doors,
     draw_camera_debug_overlay,
     draw_debug_overlay,
 )
@@ -36,8 +41,11 @@ class Game:
         self.floor_generator = FloorGenerator()
         self.world_renderer = StaticWorldRenderer(self.assets, settings.TILE_SIZE)
         self.debug_world_view = False
+        self.floor_power_available = True
         self.player: Player | None = None
         self.camera: Camera | None = None
+        self.doors: list[DynamicDoor] = []
+        self.dynamic_blockers = DynamicBlockerRegistry([], settings.TILE_SIZE)
         self.floor_world_surface: pygame.Surface | None = None
         self.floor_preview_surface: pygame.Surface | None = None
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
@@ -182,6 +190,19 @@ class Game:
             self.debug_world_view = not self.debug_world_view
             return
 
+        if self.state == GameState.PLAYING and self.debug_world_view:
+            if key == pygame.K_F6:
+                self.debug_toggle_nearest_door()
+                return
+            if key == pygame.K_F7:
+                self.debug_toggle_nearest_security_door()
+                return
+            if key == pygame.K_F8:
+                self.floor_power_available = not self.floor_power_available
+                for door in self.doors:
+                    door.set_powered(self.floor_power_available)
+                return
+
         if self.state == GameState.SPLASH:
             if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE, pygame.K_ESCAPE):
                 self.transition_to(GameState.MAIN_MENU)
@@ -260,6 +281,8 @@ class Game:
                 self.placeholder_run.generated_floor = None
                 self.player = None
                 self.camera = None
+                self.doors = []
+                self.dynamic_blockers.replace_doors([])
                 self.floor_world_surface = None
                 self.floor_preview_surface = None
             self.transition_to(GameState.FLOOR_TRANSITION)
@@ -304,7 +327,10 @@ class Game:
         if direction.length_squared() > 1:
             direction = direction.normalize()
 
-        self.player.update(direction, dt, self.placeholder_run.generated_floor)
+        for door in self.doors:
+            door.update(dt, self.player.collision_rect, floor_powered=self.floor_power_available)
+
+        self.player.update(direction, dt, self.placeholder_run.generated_floor, self.dynamic_blockers)
         self.camera.update(self.player.world_position, dt)
 
     def transition_to(self, new_state: GameState) -> None:
@@ -345,6 +371,9 @@ class Game:
         self.placeholder_run = None
         self.player = None
         self.camera = None
+        self.doors = []
+        self.dynamic_blockers.replace_doors([])
+        self.floor_power_available = True
         self.floor_world_surface = None
         self.floor_preview_surface = None
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
@@ -367,11 +396,14 @@ class Game:
             self.placeholder_run.generated_floor = None
             self.player = None
             self.camera = None
+            self.doors = []
+            self.dynamic_blockers.replace_doors([])
             self.floor_world_surface = None
             self.floor_preview_surface = None
             return
 
         self.generation_error = None
+        self.floor_power_available = True
         self.placeholder_run.generated_floor = generated_floor
         self.floor_world_surface = self.world_renderer.build_for_floor(generated_floor)
         self.floor_preview_surface = None
@@ -379,6 +411,38 @@ class Game:
         self.player = Player(generated_floor.player_spawn, self.assets, settings.TILE_SIZE)
         self.camera = Camera(settings.WINDOW_SIZE, generated_floor.world_size_pixels(settings.TILE_SIZE))
         self.camera.update(self.player.world_position)
+        door_result = create_doors_for_floor(
+            generated_floor,
+            self.assets,
+            settings.TILE_SIZE,
+            floor_powered=self.floor_power_available,
+        )
+        self.doors = door_result.doors
+        self.dynamic_blockers = door_result.blockers
+
+    def nearest_door(self, door_type: DoorType | None = None) -> DynamicDoor | None:
+        if self.player is None:
+            return None
+        candidates = [door for door in self.doors if door_type is None or door.door_type is door_type]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda door: door.world_center.distance_squared_to(self.player.world_position))
+
+    def debug_toggle_nearest_door(self) -> None:
+        door = self.nearest_door()
+        if door is not None:
+            door.debug_toggle_open_closed()
+
+    def debug_toggle_nearest_security_door(self) -> None:
+        door = self.nearest_door(DoorType.SECURITY)
+        if door is None:
+            door = self.nearest_door(DoorType.CONTAINMENT)
+        if door is None:
+            return
+        if door.is_locked:
+            door.unlock()
+        else:
+            door.lock()
 
     def shutdown(self) -> None:
         if self._shutdown_complete:
@@ -481,6 +545,7 @@ class Game:
 
         generated_floor = self.placeholder_run.generated_floor
         self.world_renderer.render_view(self.screen, generated_floor, self.camera)
+        draw_doors(self.screen, self.doors, self.camera)
 
         player_screen_rect = self.camera.world_rect_to_screen(self.player.visual_rect)
         if not self.debug_world_view:
@@ -501,12 +566,14 @@ class Game:
                 self.fonts["small"],
                 self.player,
             )
+            draw_door_debug_overlay(self.screen, self.doors, self.camera, self.fonts["small"])
             report = generated_floor.validation_report
             if report is not None:
                 debug_lines = [
                     f"Attempt {generated_floor.generation_attempt} | Attempt seed {generated_floor.attempt_seed}",
                     f"Validation {'OK' if report.is_valid else 'FAILED'} | Cycle rank {report.graph_cycle_rank}",
-                    f"Connectivity {report.connectivity_ratio:0.3f} | Creatures {len(generated_floor.candidate_creature_spawns)}",
+                    f"Connectivity {report.connectivity_ratio:0.3f} | Doors {len(self.doors)} | Power {self.floor_power_available}",
+                    "F6 nearest door | F7 nearest locked door | F8 power",
                 ]
                 self.draw_text_lines(debug_lines, 16, 112, 24)
 
@@ -607,6 +674,7 @@ class Game:
             f"Seed {self.placeholder_run.seed}",
             f"World ({self.player.world_position.x:0.1f}, {self.player.world_position.y:0.1f})",
             f"Tile {self.player.current_tile}",
+            f"Doors {len(self.doors)} | Power {'ON' if self.floor_power_available else 'OFF'}",
             f"F2 Debug {'ON' if self.debug_world_view else 'OFF'}",
             "Esc Pause",
         ]
