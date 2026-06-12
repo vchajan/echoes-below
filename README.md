@@ -292,7 +292,7 @@ Phase 10 adds the authoritative creature states `PATROL`, `INVESTIGATE`, `SEARCH
 - `CHASE`: entered only through direct perception: the player must be within detection range and line of sight must pass through the same wall, corner and dynamic-door blocker rules as scan raycasting. If sight is lost, the creature follows the last known player position briefly, then searches.
 - `STUNNED`: implemented as an API preparation state for later Shock Pulse gameplay. Direct calls such as `creature.stun(duration)` stop movement and preserve collision danger, but no module input or inventory is implemented yet.
 
-Threat events are stored in `ThreatEventSystem`. The source types are `PLAYER_SCAN`, `GENERATOR`, `RELAY`, `ECHO_CORE`, `SHOCK_PULSE`, `DECOY_BEACON` and `SCAN_PROJECTOR`; player scans create `PLAYER_SCAN` events and Phase 11 generator activation creates one strong `GENERATOR` event. Relevance uses a simple strength, age-decay and distance formula with hearing-radius filtering and hysteresis so creatures do not switch targets for tiny differences.
+Threat events are stored in `ThreatEventSystem`. The source types are `PLAYER_SCAN`, `GENERATOR`, `RELAY`, `CONTAINMENT_CONTROL`, `ECHO_CORE`, `SHOCK_PULSE`, `DECOY_BEACON` and `SCAN_PROJECTOR`; player scans create `PLAYER_SCAN` events and Phase 11 generator activation creates one strong `GENERATOR` event. Relevance uses a simple strength, age-decay and distance formula with hearing-radius filtering and hysteresis so creatures do not switch targets for tiny differences.
 
 Tile navigation lives in `game/world/navigation.py` and uses deterministic four-way A*. It respects map bounds, walls, obstacles, pillars and the existing dynamic door blocker registry. Closed, locked and wedged-closed doors block paths and line of sight; open and wedged-open doors allow them. Each AI stores pathfinding timers and counters so A* is not run every frame.
 
@@ -347,7 +347,7 @@ Phase 12 adds the second floor objective. Floor 2 begins with ordinary facility 
 
 Relay A and Relay B are deterministic scan-detectable terminals in distinct secure rooms. Standing in range and holding **F** for the configured 2.0 second duration activates each relay. Releasing **F**, leaving range, pausing outside gameplay or dying prevents partial progress from leaking forward. Each relay awards score once and emits exactly one strong `RELAY` threat event that existing creatures can investigate through the shared threat system.
 
-After both relays are active, the elevator unlocks and shows `Press F to enter elevator`. Interacting with it completes Floor 2, archives a Floor 2 summary, preserves run seed, score, materials and completed-floor count, clears all active Floor 2 runtime entities, scans, snapshots and threats, then returns to WORKSHOP. Continue after Floor 2 is a controlled placeholder notice for Floor 3; it does not generate Floor 3 in this phase.
+After both relays are active, the elevator unlocks and shows `Press F to enter elevator`. Interacting with it completes Floor 2, archives a Floor 2 summary, preserves run seed, score, materials and completed-floor count, clears all active Floor 2 runtime entities, scans, snapshots and threats, then returns to WORKSHOP. Continue after Floor 2 now descends through the transition and creates Floor 3 while preserving the run summary, score and materials.
 
 F2 debug mode shows the selected gate edge, public/secure room IDs, security door, keycard, relay locations, relay progress, elevator state and placement validation errors. F3 adds Floor 2 objective stage, keycard/door/relay/elevator status and RELAY threat counts.
 
@@ -369,3 +369,43 @@ Headless preview output:
 - `artifacts/floor2_preview_12345_relays_complete.png`
 - `artifacts/floor2_preview_12345_elevator.png`
 - `artifacts/floor2_preview_12345_workshop.png`
+
+
+## Floor 3 Echo Core Extraction And Victory
+
+Phase 13 completes the run. Continue from the Floor 2 workshop descends to Floor 3 with the same run seed, score, material counters and completed-floor summaries. Floor 3 begins powered with two invisible AI creatures, one locked containment door, one containment component, one containment control and the Echo Core.
+
+The containment component and control are placed on the public side of the selected containment gate. The Echo Core is placed in a deterministic containment-side room. Collect the component by contact, stand inside the containment-control interaction range and hold **F** for the configured 2.0 second installation. Releasing **F** or leaving range resets progress; pausing freezes it.
+
+Completing the control interaction unlocks the authoritative containment door, awards score and emits exactly one strong `CONTAINMENT_CONTROL` threat event. The door then uses the existing powered automatic-door, blocker, scan, line-of-sight and AI-navigation behaviour.
+
+Collecting the Echo Core starts extraction. It awards score, emits exactly one stronger and longer-lived `ECHO_CORE` threat event, unlocks the elevator, accelerates the existing creatures and deterministically adds a third creature when a validated spawn is available. The player must return to the elevator with one life remaining. Entering it clears all Floor 3 runtime state, archives the final summary and enters `VICTORY`.
+
+The victory screen displays final time, score, seed, completed floors and retained materials. `New Run` resets all progression with a new seed; `Main Menu` discards the run.
+
+Floor 3 HUD stages:
+
+- `Find the containment component`
+- `Install component at containment control`
+- `Retrieve the Echo Core`
+- `Return to the elevator`
+
+Create deterministic Floor 3 and victory screenshots with:
+
+```powershell
+python tools/floor3_preview.py --seed 12345 --headless
+```
+
+Headless preview output:
+
+- `artifacts/floor3_preview_12345_initial.png`
+- `artifacts/floor3_preview_12345_component.png`
+- `artifacts/floor3_preview_12345_component_collected.png`
+- `artifacts/floor3_preview_12345_control_progress.png`
+- `artifacts/floor3_preview_12345_containment_open.png`
+- `artifacts/floor3_preview_12345_echo_core.png`
+- `artifacts/floor3_preview_12345_extraction.png`
+- `artifacts/floor3_preview_12345_elevator.png`
+- `artifacts/floor3_preview_12345_victory.png`
+
+F2 includes containment partition, objective positions, door state, installation progress and threat IDs. F3 includes objective stage, extraction state, elevator state and event counts.

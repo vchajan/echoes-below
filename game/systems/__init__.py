@@ -7,6 +7,7 @@ from game.systems.floor_objectives import (
     Floor2ObjectiveState,
     Floor2ObjectiveSystem,
 )
+from game.systems.floor3_objectives import Floor3ObjectiveState, Floor3ObjectiveSystem
 from game.systems.scan import ScanSystem
 from game.systems.snapshots import EchoSnapshotSystem
 from game.systems.threat_events import ThreatEventSystem, ThreatSourceType
@@ -18,6 +19,8 @@ __all__ = [
     "Floor1ObjectiveSystem",
     "Floor2ObjectiveState",
     "Floor2ObjectiveSystem",
+    "Floor3ObjectiveState",
+    "Floor3ObjectiveSystem",
     "ScanSystem",
     "EchoSnapshotSystem",
     "ThreatEventSystem",

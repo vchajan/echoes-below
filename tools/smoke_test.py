@@ -14,7 +14,7 @@ import pygame
 from game import settings
 from game.app import Game
 from game.entities.door import DoorState, DoorType, DynamicDoor
-from game.entities.objectives import RelayState
+from game.entities.objectives import ContainmentControlState, RelayState
 from game.entities.scan_objects import ElevatorState
 from game.states import GameState
 from game.systems.creature_ai import CreatureState
@@ -343,6 +343,60 @@ def complete_floor2_objective(game: Game) -> None:
     require(game.snapshot_system.snapshots == [], "Floor 2 completion retained snapshots.")
 
 
+def complete_floor3_objective(game: Game) -> None:
+    require(game.floor_objectives is not None, "Floor 3 objectives were not created.")
+    objectives = game.floor_objectives
+    require(getattr(objectives.state, "floor_number", None) == 3, "Current objective system is not Floor 3.")
+    require(game.elevator_entity is not None, "Floor 3 elevator missing.")
+
+    place_player_at(game, objectives.component.tile)
+    game.update_gameplay(0.0, pygame.Vector2(0, 0), interact_held=False)
+    require(objectives.state.component_collected, "Containment component was not collected.")
+    require(objectives.control.state is ContainmentControlState.READY, "Containment control did not become ready.")
+
+    place_player_at(game, objectives.control.tile)
+    for _ in range(4):
+        game.update_gameplay(
+            settings.CONTAINMENT_INSTALL_DURATION / 4.0,
+            pygame.Vector2(0, 0),
+            interact_held=True,
+        )
+    require(objectives.state.control_active, "Containment control did not activate.")
+    require(not objectives.containment_door.is_locked, "Containment door did not unlock.")
+    containment_events = [
+        event for event in game.threat_events.active_events
+        if event.source_type is ThreatSourceType.CONTAINMENT_CONTROL
+    ]
+    require(len(containment_events) == 1, "Containment control did not emit one threat event.")
+
+    initial_creature_count = len(game.creatures)
+    place_player_at(game, objectives.echo_core.tile)
+    game.update_gameplay(0.0, pygame.Vector2(0, 0), interact_held=False)
+    require(objectives.state.echo_core_collected, "Echo Core was not collected.")
+    require(objectives.state.extraction_active, "Extraction phase did not start.")
+    require(game.elevator_entity.state is ElevatorState.UNLOCKED, "Floor 3 elevator did not unlock.")
+    require(len(game.creatures) >= initial_creature_count, "Extraction removed creatures unexpectedly.")
+    core_events = [
+        event for event in game.threat_events.active_events
+        if event.source_type is ThreatSourceType.ECHO_CORE
+    ]
+    require(len(core_events) == 1, "Echo Core did not emit one extraction threat event.")
+
+    expected_score = game.placeholder_run.score + settings.FLOOR3_COMPLETION_SCORE
+    place_player_at(game, game.elevator_entity.tile)
+    game.update_gameplay(0.0, pygame.Vector2(0, 0), interact_held=True)
+    require(game.state is GameState.VICTORY, "Floor 3 extraction did not enter VICTORY.")
+    require(game.last_completed_floor == 3, "Floor 3 completion marker was not recorded.")
+    require(game.placeholder_run.completed_floor_count == 3, "Completed floor count did not reach three.")
+    require(game.placeholder_run.score == expected_score, "Floor 3 completion score was not applied.")
+    require(3 in game.placeholder_run.floor_completion_summaries, "Floor 3 summary was not archived.")
+    require(game.placeholder_run.generated_floor is None, "Victory retained generated floor runtime.")
+    require(game.player is None and game.camera is None, "Victory retained player or camera runtime.")
+    require(game.floor_objectives is None, "Victory retained Floor 3 objective runtime.")
+    require(game.creatures == [] and game.doors == [], "Victory retained creature or door runtime.")
+    require(len(game.threat_events.active_events) == 0, "Victory retained threat events.")
+
+
 def advance_until(game: Game, predicate, frames: int = 120) -> None:
     for _ in range(frames):
         game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
@@ -660,6 +714,20 @@ def main() -> int:
 
         freeze_creatures(game)
         complete_floor2_objective(game)
+
+        game.perform_action("continue_floor")
+        require(game.state is GameState.FLOOR_TRANSITION, "Continue did not begin Floor 3 transition.")
+        require(game.placeholder_run.floor == 3, "Continue did not set the run floor to Floor 3.")
+        game.update(settings.FLOOR_TRANSITION_DURATION + 0.1)
+        require(game.state is GameState.PLAYING, "Floor 3 transition did not enter PLAYING.")
+        require(game.placeholder_run.generated_floor is not None, "Floor 3 generated floor missing.")
+        require(game.placeholder_run.generated_floor.floor_number == 3, "Generated floor number was not 3.")
+        require(game.floor_objectives is not None, "Floor 3 objectives were not created.")
+        require(game.floor_objectives.state.floor_number == 3, "Floor 3 objective state was not active.")
+        require(game.floor_objectives.placement.validation_errors == [], "Floor 3 placement validation failed.")
+        require(len(game.creatures) == 2, "Floor 3 did not begin with two creatures.")
+        freeze_creatures(game)
+        complete_floor3_objective(game)
 
         game.request_quit()
         game.run_one_frame(1.0 / settings.FPS)

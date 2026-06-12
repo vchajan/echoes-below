@@ -417,14 +417,18 @@ class Floor2ObjectiveTests(unittest.TestCase):
         self.assertTrue(summary["relay_b_active"])
         self.assertTrue(summary["security_override_completed"])
 
-    def test_floor2_workshop_continue_does_not_generate_floor3(self) -> None:
+    def test_floor2_workshop_continue_transitions_to_floor3(self) -> None:
         complete_floor2(self.game)
         self.assertEqual(self.game.state, GameState.WORKSHOP)
         self.game.perform_action("continue_floor")
-        self.assertEqual(self.game.state, GameState.WORKSHOP)
-        self.assertIn("Floor 3", self.game.workshop_notice)
-        self.assertIsNone(self.game.placeholder_run.generated_floor)
-        self.assertIsNone(self.game.floor_objectives)
+        self.assertEqual(self.game.state, GameState.FLOOR_TRANSITION)
+        self.assertEqual(self.game.placeholder_run.floor, 3)
+        self.game.update(settings.FLOOR_TRANSITION_DURATION + 0.1)
+        self.assertEqual(self.game.state, GameState.PLAYING)
+        self.assertIsNotNone(self.game.placeholder_run.generated_floor)
+        self.assertEqual(self.game.placeholder_run.generated_floor.floor_number, 3)
+        self.assertIsNotNone(self.game.floor_objectives)
+        self.assertEqual(self.game.floor_objectives.state.floor_number, 3)
 
     def test_retry_same_seed_after_floor2_death_restarts_whole_run_at_floor1(self) -> None:
         creature = self.game.creatures[0]

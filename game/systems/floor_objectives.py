@@ -89,6 +89,9 @@ class Floor1ObjectiveUpdate:
     floor_completed: bool = False
     power_changed: bool = False
     generator_threat_event_id: int | None = None
+    containment_threat_event_id: int | None = None
+    echo_core_threat_event_id: int | None = None
+    extraction_started: bool = False
 
 
 class Floor1ObjectiveSystem:
