@@ -12,6 +12,7 @@ from game.entities.scan_objects import ElevatorEntity, MaterialPickup
 from game.entities.player import Player, movement_direction_from_bools
 from game import settings
 from game.systems.creature_ai import CreatureAI, CreatureState
+from game.systems.floor_objectives import Floor1ObjectiveSystem
 from game.systems.scan import ScanRenderer, ScanSystem
 from game.systems.snapshots import EchoSnapshotRenderer, EchoSnapshotSystem
 from game.systems.threat_events import ThreatEventSystem
@@ -64,6 +65,7 @@ class Game:
         self.camera: Camera | None = None
         self.doors: list[DynamicDoor] = []
         self.floor_content: FloorContent | None = None
+        self.floor_objectives: Floor1ObjectiveSystem | None = None
         self.material_pickups: list[MaterialPickup] = []
         self.elevator_entity: ElevatorEntity | None = None
         self.creatures: list[Creature] = []
@@ -75,6 +77,8 @@ class Game:
         self.floor_preview_surface: pygame.Surface | None = None
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
         self.generation_error: str | None = None
+        self.last_completed_floor: int | None = None
+        self.workshop_notice = "Crafting will be enabled in a later phase"
 
         self.running = True
         self._shutdown_complete = False
@@ -307,6 +311,9 @@ class Game:
             self.end_placeholder_run()
             self.transition_to(GameState.MAIN_MENU)
         elif action == "continue_floor":
+            if self.state is GameState.WORKSHOP:
+                self.workshop_notice = "Crafting will be enabled in a later phase"
+                return
             if self.placeholder_run is not None:
                 self.placeholder_run.floor += 1
                 self.placeholder_run.generated_floor = None
@@ -315,6 +322,7 @@ class Game:
                 self.doors = []
                 self.dynamic_blockers.replace_doors([])
                 self.floor_content = None
+                self.floor_objectives = None
                 self.material_pickups = []
                 self.elevator_entity = None
                 self.creatures = []
@@ -345,6 +353,7 @@ class Game:
         self,
         dt: float,
         movement_direction: pygame.Vector2 | tuple[float, float] | None = None,
+        interact_held: bool | None = None,
     ) -> None:
         if (
             self.state is not GameState.PLAYING
@@ -359,14 +368,18 @@ class Game:
             self._enter_death_state()
             return
 
-        if movement_direction is None:
+        keys = None
+        if movement_direction is None or interact_held is None:
             keys = pygame.key.get_pressed()
+        if movement_direction is None:
             movement_direction = movement_direction_from_bools(
                 keys[pygame.K_w] or keys[pygame.K_UP],
                 keys[pygame.K_s] or keys[pygame.K_DOWN],
                 keys[pygame.K_a] or keys[pygame.K_LEFT],
                 keys[pygame.K_d] or keys[pygame.K_RIGHT],
             )
+        if interact_held is None:
+            interact_held = bool(keys[pygame.K_f])
         direction = pygame.Vector2(movement_direction)
         if direction.length_squared() > 1:
             direction = direction.normalize()
@@ -420,6 +433,24 @@ class Game:
             self.dynamic_blockers,
             settings.TILE_SIZE,
         )
+        if self.floor_objectives is not None:
+            objective_result = self.floor_objectives.update(
+                dt,
+                self.player.collision_rect,
+                interact_held=interact_held,
+                session_time=self.placeholder_run.elapsed_time,
+                threat_events=self.threat_events,
+                elevator=self.elevator_entity,
+            )
+            if objective_result.score_delta:
+                self.placeholder_run.score += objective_result.score_delta
+            if objective_result.power_changed:
+                self.floor_power_available = True
+                for door in self.doors:
+                    door.set_powered(True)
+            if objective_result.floor_completed:
+                self.complete_floor_one()
+                return
         self.collect_material_pickups()
 
     def _player_touches_creature(self) -> Creature | None:
@@ -440,12 +471,17 @@ class Game:
         self.death_world_position = (
             creature.world_position.copy() if creature is not None else None
         )
+        if self.floor_objectives is not None:
+            self.floor_objectives.clear_interaction()
+            self.floor_objectives.reset_messages()
         self.transition_to(GameState.DEATH)
 
     def scan_detectable_entities(self) -> list[object]:
         entities: list[object] = []
         if self.floor_content is not None:
             entities.extend(self.floor_content.scan_entities)
+        if self.floor_objectives is not None:
+            entities.extend(self.floor_objectives.scan_entities)
         entities.extend(self.creatures)
         return entities
 
@@ -533,6 +569,7 @@ class Game:
         self.doors = []
         self.dynamic_blockers.replace_doors([])
         self.floor_content = None
+        self.floor_objectives = None
         self.material_pickups = []
         self.elevator_entity = None
         self.creatures = []
@@ -544,6 +581,8 @@ class Game:
         self.floor_preview_surface = None
         self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
         self.generation_error = None
+        self.last_completed_floor = None
+        self.workshop_notice = "Crafting will be enabled in a later phase"
         self.scan_system.reset()
         self.threat_events.reset()
         self.snapshot_system.reset()
@@ -556,6 +595,7 @@ class Game:
         self.scan_system.reset()
         self.threat_events.reset()
         self.snapshot_system.reset()
+        self.floor_objectives = None
         if self.placeholder_run is None:
             return
         try:
@@ -571,6 +611,7 @@ class Game:
             self.doors = []
             self.dynamic_blockers.replace_doors([])
             self.floor_content = None
+            self.floor_objectives = None
             self.material_pickups = []
             self.elevator_entity = None
             self.creatures = []
@@ -581,7 +622,7 @@ class Game:
             return
 
         self.generation_error = None
-        self.floor_power_available = True
+        self.floor_power_available = generated_floor.floor_number != 1
         self.placeholder_run.generated_floor = generated_floor
         self.floor_world_surface = self.world_renderer.build_for_floor(generated_floor)
         self.floor_preview_surface = None
@@ -600,11 +641,29 @@ class Game:
         self.floor_content = create_floor_content(generated_floor, self.assets, settings.TILE_SIZE)
         self.material_pickups = self.floor_content.materials
         self.elevator_entity = self.floor_content.elevator
+        if generated_floor.floor_number == 1:
+            objective_reserved = {pickup.tile for pickup in self.material_pickups}
+            objective_reserved.update(door.tile for door in self.doors)
+            objective_reserved.update(generated_floor.candidate_creature_spawns)
+            self.floor_objectives = Floor1ObjectiveSystem.create_for_floor(
+                generated_floor,
+                self.assets,
+                settings.TILE_SIZE,
+                self.dynamic_blockers,
+                reserved_tiles=objective_reserved,
+            )
+        else:
+            self.floor_objectives = None
         
         # Create deterministic creatures from validated spawn candidates.
         reserved_tiles = {generated_floor.player_spawn, generated_floor.elevator_tile}
         reserved_tiles.update(pickup.tile for pickup in self.material_pickups)
         reserved_tiles.update(door.tile for door in self.doors)
+        if self.floor_objectives is not None:
+            for entity in self.floor_objectives.active_entities:
+                tile = getattr(entity, "tile", None)
+                if tile is not None:
+                    reserved_tiles.add(tile)
         valid_spawns = [
             tile
             for tile in generated_floor.candidate_creature_spawns
@@ -639,6 +698,33 @@ class Game:
         self.scan_system.reset()
         self.threat_events.reset()
         self.snapshot_system.reset()
+
+    def complete_floor_one(self) -> None:
+        if self.placeholder_run is None:
+            return
+        self.last_completed_floor = 1
+        self.placeholder_run.completed_floor_count = max(self.placeholder_run.completed_floor_count, 1)
+        self.workshop_notice = "Crafting will be enabled in a later phase"
+        self.player = None
+        self.camera = None
+        self.doors = []
+        self.dynamic_blockers.replace_doors([])
+        self.floor_content = None
+        self.floor_objectives = None
+        self.material_pickups = []
+        self.elevator_entity = None
+        self.creatures = []
+        self.creatures_rng = None
+        self.floor_power_available = False
+        self.placeholder_run.generated_floor = None
+        self.floor_world_surface = None
+        self.floor_preview_surface = None
+        self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
+        self.scan_system.reset()
+        self.threat_events.reset()
+        self.snapshot_system.reset()
+        self.world_renderer.clear()
+        self.transition_to(GameState.WORKSHOP)
 
     def nearest_door(self, door_type: DoorType | None = None) -> DynamicDoor | None:
         if self.player is None:
@@ -768,6 +854,8 @@ class Game:
         draw_doors(self.screen, self.doors, self.camera)
         if self.debug_world_view and self.floor_content is not None:
             draw_floor_content_debug(self.screen, self.floor_content, self.camera, self.fonts["small"])
+        if self.debug_world_view and self.floor_objectives is not None:
+            self.draw_floor1_objective_debug()
 
         player_screen_rect = self.camera.world_rect_to_screen(self.player.visual_rect)
         if not self.debug_world_view:
@@ -785,6 +873,7 @@ class Game:
                 self.player.world_position,
                 self.camera,
             )
+            self.draw_objective_contact_hints()
             self.screen.blit(self.player.image, player_screen_rect)
         else:
             self.scan_renderer.render(self.screen, self.scan_system, self.camera)
@@ -904,6 +993,30 @@ class Game:
                     f"Materials {len([p for p in self.material_pickups if p.scan_active])} | Creatures {len(self.creatures)} | Echo snapshots {len(self.snapshot_system.snapshots)}",
                     "F6 nearest door | F7 nearest locked door | F8 power",
                 ]
+                if self.floor_objectives is not None:
+                    state = self.floor_objectives.state
+                    placement = self.floor_objectives.placement
+                    debug_lines.extend(
+                        [
+                            (
+                                f"Floor1 objective: {state.current_objective_text} | "
+                                f"components {state.components_collected}/2"
+                            ),
+                            (
+                                f"Rooms A:{placement.component_a_room_id} B:{placement.component_b_room_id} "
+                                f"G:{placement.generator_room_id} | target {state.interaction_target_id}"
+                            ),
+                            (
+                                f"Generator {self.floor_objectives.generator.state.name} "
+                                f"repair {state.generator_repair_progress:0.2f}/{settings.GENERATOR_REPAIR_DURATION:0.2f} "
+                                f"threat {state.generator_threat_event_id}"
+                            ),
+                            (
+                                f"Power {state.floor_power_active} | elevator unlocked {state.elevator_unlocked} "
+                                f"complete {state.floor_complete}"
+                            ),
+                        ]
+                    )
                 self.draw_text_lines(debug_lines, 16, 112, 24)
 
         self.draw_gameplay_hud()
@@ -924,8 +1037,20 @@ class Game:
             icon = module_icons[icon_name]
             assert isinstance(icon, pygame.Surface)
             self.screen.blit(icon, (settings.WINDOW_WIDTH // 2 - 92 + index * 68, 330))
-        self.draw_centered_text("Elevator Workshop", "subtitle", settings.COLOR_TEXT, 210)
-        self.draw_centered_text("Crafting will be added in a later phase.", "body", settings.COLOR_TEXT_MUTED, 280)
+        run = self.placeholder_run
+        score = run.score if run is not None else 0
+        materials = run.material_counts if run is not None else {"scrap": 0, "circuit": 0, "power_cell": 0}
+        title = "Floor 1 Complete" if self.last_completed_floor == 1 else "Elevator Workshop"
+        self.draw_centered_text(title, "subtitle", settings.COLOR_TEXT, 185)
+        self.draw_centered_text("Power restored", "body", settings.COLOR_ACCENT, 245)
+        self.draw_centered_text(f"Score {score}", "body", settings.COLOR_TEXT_MUTED, 285)
+        self.draw_centered_text(
+            f"Materials S:{materials.get('scrap', 0)} C:{materials.get('circuit', 0)} P:{materials.get('power_cell', 0)}",
+            "small",
+            settings.COLOR_TEXT_MUTED,
+            370,
+        )
+        self.draw_centered_text(self.workshop_notice, "small", settings.COLOR_TEXT_MUTED, 398)
         self.draw_button_group(GameState.WORKSHOP)
 
     def render_floor_transition(self) -> None:
@@ -1013,23 +1138,36 @@ class Game:
     def draw_gameplay_hud(self) -> None:
         if self.placeholder_run is None or self.player is None:
             return
+        objective_lines: list[str] = []
+        prompt_line = ""
+        if self.floor_objectives is not None:
+            state = self.floor_objectives.state
+            objective_lines = [
+                "RESTORE POWER",
+                state.current_objective_text,
+            ]
+            if state.current_prompt:
+                prompt_line = state.current_prompt
         hud_lines = [
             f"Floor {self.placeholder_run.floor}",
             f"Seed {self.placeholder_run.seed}",
             f"World ({self.player.world_position.x:0.1f}, {self.player.world_position.y:0.1f})",
             f"Tile {self.player.current_tile}",
             f"Doors {len(self.doors)} | Power {'ON' if self.floor_power_available else 'OFF'}",
+            *objective_lines,
             (
                 f"Materials S:{self.placeholder_run.material_counts.get('scrap', 0)} "
                 f"C:{self.placeholder_run.material_counts.get('circuit', 0)} "
                 f"P:{self.placeholder_run.material_counts.get('power_cell', 0)} | Score {self.placeholder_run.score}"
             ),
+            prompt_line,
             "SCAN READY" if self.scan_system.ready else f"SCAN {self.scan_system.cooldown_remaining:0.1f}s",
             f"F2 Debug {'ON' if self.debug_world_view else 'OFF'} | F3 Perf {'ON' if self.performance_overlay else 'OFF'}",
-            "Space Scan | Esc Pause",
+            "Space Scan | F Interact | Esc Pause",
         ]
+        hud_lines = [line for line in hud_lines if line]
         font = self.fonts["small"]
-        width = 288
+        width = 356
         height = 18 + len(hud_lines) * 24
         panel = pygame.Rect(12, 12, width, height)
         self.overlay_surface.fill((0, 0, 0, 0))
@@ -1037,8 +1175,86 @@ class Game:
         pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, panel, width=1, border_radius=6)
         self.screen.blit(self.overlay_surface, (0, 0))
         for index, line in enumerate(hud_lines):
-            color = settings.COLOR_TEXT if index < 4 else settings.COLOR_TEXT_MUTED
+            color = settings.COLOR_ACCENT if line == "RESTORE POWER" else (
+                settings.COLOR_TEXT if index < 4 else settings.COLOR_TEXT_MUTED
+            )
             self.screen.blit(font.render(line, True, color), (24, 24 + index * 24))
+        self.draw_interaction_progress()
+        self.draw_context_messages()
+
+    def draw_interaction_progress(self) -> None:
+        if self.floor_objectives is None:
+            return
+        state = self.floor_objectives.state
+        if state.interaction_progress <= 0.0 or state.generator_repaired:
+            return
+        fraction = max(0.0, min(1.0, state.interaction_progress / settings.GENERATOR_REPAIR_DURATION))
+        panel = pygame.Rect(settings.WINDOW_WIDTH // 2 - 180, settings.WINDOW_HEIGHT - 88, 360, 42)
+        fill_rect = pygame.Rect(panel.left + 10, panel.bottom - 18, int((panel.width - 20) * fraction), 8)
+        self.overlay_surface.fill((0, 0, 0, 0))
+        pygame.draw.rect(self.overlay_surface, (6, 10, 14, 210), panel, border_radius=6)
+        pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, panel, width=1, border_radius=6)
+        pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT, fill_rect, border_radius=3)
+        self.screen.blit(self.overlay_surface, (0, 0))
+        label = self.fonts["small"].render(f"Repairing generator {fraction * 100:0.0f}%", True, settings.COLOR_TEXT)
+        self.screen.blit(label, (panel.left + 10, panel.top + 7))
+
+    def draw_context_messages(self) -> None:
+        if self.floor_objectives is None or not self.floor_objectives.messages:
+            return
+        font = self.fonts["small"]
+        visible = self.floor_objectives.messages[-3:]
+        y = settings.WINDOW_HEIGHT - 160 - (len(visible) - 1) * 24
+        for message in visible:
+            image = font.render(message.text, True, settings.COLOR_ACCENT)
+            rect = image.get_rect(midtop=(settings.WINDOW_WIDTH // 2, y))
+            self.screen.blit(image, rect)
+            y += 24
+
+    def draw_objective_contact_hints(self) -> None:
+        if self.floor_objectives is None or self.player is None or self.camera is None:
+            return
+        screen_rect = self.screen.get_rect()
+        for entity in self.floor_objectives.active_entities:
+            distance = entity.world_position.distance_to(self.player.world_position)
+            if distance > settings.OBJECTIVE_CONTACT_HINT_RADIUS:
+                continue
+            position = tuple(round(value) for value in self.camera.world_to_screen(entity.world_position))
+            if not screen_rect.collidepoint(position):
+                continue
+            color = settings.COLOR_ACCENT if entity is self.floor_objectives.generator else (255, 220, 80)
+            pygame.draw.circle(self.screen, color, position, 3)
+
+    def draw_floor1_objective_debug(self) -> None:
+        if self.floor_objectives is None or self.camera is None:
+            return
+        screen_rect = self.screen.get_rect()
+        font = self.fonts["small"]
+        for entity in self.floor_objectives.active_entities:
+            rect = self.camera.world_rect_to_screen(entity.visual_rect)
+            if not screen_rect.colliderect(rect):
+                continue
+            self.screen.blit(entity.image, rect)
+            color = (255, 220, 80) if entity is not self.floor_objectives.generator else settings.COLOR_SUCCESS
+            pygame.draw.rect(self.screen, color, rect, 1)
+            collision_rect = getattr(entity, "collision_rect", None)
+            if collision_rect is not None:
+                pygame.draw.rect(self.screen, color, self.camera.world_rect_to_screen(collision_rect), 1)
+            if entity is self.floor_objectives.generator:
+                pygame.draw.rect(
+                    self.screen,
+                    settings.COLOR_ACCENT,
+                    self.camera.world_rect_to_screen(entity.interaction_rect),
+                    1,
+                )
+                label_text = (
+                    f"{entity.unique_id} room={entity.room_id} {entity.state.name} "
+                    f"repair={entity.repair_progress:0.2f}"
+                )
+            else:
+                label_text = f"{entity.unique_id} room={entity.room_id} tile={entity.tile}"
+            label = font.render(label_text, True, color)
+            self.screen.blit(label, (rect.left, max(0, rect.top - 18)))
 
     def draw_performance_overlay(self) -> None:
         wave = self.scan_system.active_wave
@@ -1075,6 +1291,24 @@ class Game:
             ),
             f"stunned {ai_stats['stunned_creatures']} | active path target count {ai_stats['creatures_with_paths']}",
         ]
+        if self.floor_objectives is not None:
+            state = self.floor_objectives.state
+            lines.extend(
+                [
+                    (
+                        f"F1 objective {state.current_objective_text} | "
+                        f"components {state.components_collected}/2"
+                    ),
+                    (
+                        f"repair {state.generator_repair_progress:0.2f}/{settings.GENERATOR_REPAIR_DURATION:0.2f} "
+                        f"powered {state.floor_power_active} elevator {state.elevator_unlocked}"
+                    ),
+                    (
+                        f"objective entities {len(self.floor_objectives.active_entities)} | "
+                        f"generator events {state.generator_activation_event_count}"
+                    ),
+                ]
+            )
         font = self.fonts["small"]
         width = 390
         height = 18 + len(lines) * 23

@@ -2,7 +2,7 @@
 
 Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is currently complete through Phase 10. It contains the application shell, state system, cached asset pipeline, seeded and validated procedural floors, player movement, camera and collisions, dynamic doors, fixed-origin DDA scan occlusion, fading static traces, generic object echoes, moving invisible creatures, threat-aware creature AI, deterministic material pickups, elevator scan states, death/restart flow, score/material counters, tests and headless preview tools. Objectives, crafting and active modules are later phases.
+This repository is currently complete through Phase 11. It contains the application shell, state system, cached asset pipeline, seeded and validated procedural floors, player movement, camera and collisions, dynamic doors, fixed-origin DDA scan occlusion, fading static traces, generic object echoes, moving invisible creatures, threat-aware creature AI, deterministic material pickups, Floor 1 restore-power objectives, elevator completion, death/restart flow, score/material counters, tests and headless preview tools. Workshop crafting, Floor 2, Floor 3 and active modules are later phases.
 
 ## Setup
 
@@ -61,11 +61,12 @@ python tools/door_preview.py --seed 12345 --floor 2 --headless
 python tools/snapshot_preview.py --seed 12345 --floor 1 --headless
 python tools/creature_preview.py --seed 12345 --floor 1 --headless
 python tools/ai_preview.py --seed 12345 --floor 1 --headless
+python tools/floor1_preview.py --seed 12345 --headless
 python -m py_compile main.py
 python -c "import main; print('main import ok')"
 ```
 
-Floor objectives, crafting, active modules and final HUD scoring remain later phases.
+Workshop crafting, Floor 2 objectives, Floor 3 extraction, active modules and final HUD scoring remain later phases.
 
 ## Assets
 
@@ -130,7 +131,7 @@ Door types:
 - Security doors start locked, block movement and future scan, and expose an unlock API. Once unlocked, they behave like powered automatic doors.
 - Containment doors start locked, remain distinct from security doors, expose a containment unlock API, and then behave as heavier powered doors.
 
-Temporary Phase 6 behavior: Floor 1 uses powered doors only so the current playable preview remains traversable. Floor 2 exposes a deterministic security-door candidate, and Floor 3 exposes a containment-door candidate for later objective phases.
+Phase 11 replaces the earlier temporary Floor 1 power rule. Floor 1 now starts with power off; objective placement is validated so both components and the generator are reachable before repair. Powered doors stay closed until the generator is repaired. Floor 2 exposes a deterministic security-door candidate, and Floor 3 exposes a containment-door candidate for later objective phases.
 
 Closed, locked, opening, closing and wedged-closed doors block player movement, future scan, future line of sight and future creature navigation. Open and wedged-open doors block none of those purposes. Closing begins only after the doorway is clear, so doors do not push or trap the player.
 
@@ -243,7 +244,7 @@ Procedural floors now receive deterministic optional materials:
 
 They are placed on validated walkable tiles away from the spawn, elevator and doorways. Collection is collision-based, idempotent, adds five points and updates the run counters shown in the HUD. Their normal sprites remain hidden outside F2 debug mode; a tiny contact hint appears only at very close range.
 
-The elevator is a scan-detectable entity with locked, unlocked and active states. Its state controls the captured outline colour and animation frame. Final floor-transition interaction is implemented in later objective phases.
+The elevator is a scan-detectable entity with locked, unlocked and active states. Its state controls the captured outline colour and animation frame. Phase 11 uses the unlocked elevator to complete Floor 1 and enter the controlled WORKSHOP placeholder.
 
 Create deterministic object-echo screenshots with:
 
@@ -289,7 +290,7 @@ Phase 10 adds the authoritative creature states `PATROL`, `INVESTIGATE`, `SEARCH
 - `CHASE`: entered only through direct perception: the player must be within detection range and line of sight must pass through the same wall, corner and dynamic-door blocker rules as scan raycasting. If sight is lost, the creature follows the last known player position briefly, then searches.
 - `STUNNED`: implemented as an API preparation state for later Shock Pulse gameplay. Direct calls such as `creature.stun(duration)` stop movement and preserve collision danger, but no module input or inventory is implemented yet.
 
-Threat events are stored in `ThreatEventSystem`. The source types are `PLAYER_SCAN`, `GENERATOR`, `RELAY`, `ECHO_CORE`, `SHOCK_PULSE`, `DECOY_BEACON` and `SCAN_PROJECTOR`; only `PLAYER_SCAN` currently creates gameplay events. Relevance uses a simple strength, age-decay and distance formula with hearing-radius filtering and hysteresis so creatures do not switch targets for tiny differences.
+Threat events are stored in `ThreatEventSystem`. The source types are `PLAYER_SCAN`, `GENERATOR`, `RELAY`, `ECHO_CORE`, `SHOCK_PULSE`, `DECOY_BEACON` and `SCAN_PROJECTOR`; player scans create `PLAYER_SCAN` events and Phase 11 generator activation creates one strong `GENERATOR` event. Relevance uses a simple strength, age-decay and distance formula with hearing-radius filtering and hysteresis so creatures do not switch targets for tiny differences.
 
 Tile navigation lives in `game/world/navigation.py` and uses deterministic four-way A*. It respects map bounds, walls, obstacles, pillars and the existing dynamic door blocker registry. Closed, locked and wedged-closed doors block paths and line of sight; open and wedged-open doors allow them. Each AI stores pathfinding timers and counters so A* is not run every frame.
 
@@ -309,3 +310,31 @@ Headless AI preview saves:
 - `artifacts/ai_preview_12345_floor1_stunned.png`
 
 F2 now draws creature state, previous state, transition reason, current target, path tiles, selected threat, search centre, last known player marker and recent line-of-sight result. F3 reports state counts, active threat counts, threat source counts, pathfinding calls per second, path timing, active path nodes, perception checks per second and stunned creature count.
+
+## Floor 1 Restore Power Objective
+
+Phase 11 adds the first complete floor objective. Floor 1 begins without power. The player must recover Generator Component A and Generator Component B, then stand inside the generator interaction range and hold **F** for the configured 1.5 second repair duration. Releasing **F**, leaving range or dying resets repair progress; pausing freezes it.
+
+Generator components and the generator are scan-detectable objects using the same snapshot system as materials and creatures. Components remain hidden in normal darkness except for scan echoes and close contact hints. Already captured historical snapshots remain after a component is picked up.
+
+When the generator is repaired, the game sets Floor 1 power active, changes the generator to the powered state, adds score, emits exactly one strong `GENERATOR` threat event, enables normal powered-door behaviour and unlocks the elevator. Security and containment doors remain unaffected for later floors.
+
+The elevator starts locked and shows `Elevator offline` before power restoration. After the generator is powered, the elevator changes to unlocked, shows `Press F to enter elevator`, and holding **F** in range completes Floor 1. Completion adds score, clears Floor 1 runtime objects, scans, snapshots, doors, creatures, objectives and threat events, then transitions to the controlled WORKSHOP placeholder. The workshop displays Floor 1 completion, current score, material counts and the temporary `Crafting will be enabled in a later phase` message. Continue intentionally stays in this placeholder for now.
+
+F2 debug mode shows objective rooms, entity positions, generator interaction Rect, power/elevator state and generator threat ID. F3 adds objective stage, component count, generator progress, power state, elevator unlock state, objective-entity count and generator activation count.
+
+Create deterministic Floor 1 objective screenshots with:
+
+```powershell
+python tools/floor1_preview.py --seed 12345 --headless
+```
+
+Headless preview output:
+
+- `artifacts/floor1_preview_12345_initial.png`
+- `artifacts/floor1_preview_12345_component1.png`
+- `artifacts/floor1_preview_12345_components_complete.png`
+- `artifacts/floor1_preview_12345_repairing.png`
+- `artifacts/floor1_preview_12345_powered.png`
+- `artifacts/floor1_preview_12345_elevator.png`
+- `artifacts/floor1_preview_12345_workshop.png`

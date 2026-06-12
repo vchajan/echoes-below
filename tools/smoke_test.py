@@ -14,8 +14,10 @@ import pygame
 from game import settings
 from game.app import Game
 from game.entities.door import DoorState, DoorType, DynamicDoor
+from game.entities.scan_objects import ElevatorState
 from game.states import GameState
 from game.systems.creature_ai import CreatureState
+from game.systems.threat_events import ThreatSourceType
 from game.systems.raycasting import has_line_of_sight
 from game.world import collision
 from game.world.blockers import BlockerPurpose
@@ -184,6 +186,73 @@ def place_player_at(game: Game, tile: tuple[int, int]) -> None:
     game.camera.update(game.player.world_position)
 
 
+def freeze_creatures(game: Game) -> None:
+    for creature in game.creatures:
+        creature.movement_enabled = False
+
+
+def collect_floor1_components(game: Game) -> None:
+    require(game.floor_objectives is not None, "Floor 1 objectives were not created.")
+    for component in game.floor_objectives.components:
+        place_player_at(game, component.tile)
+        game.update_gameplay(0.0, pygame.Vector2(0, 0), interact_held=False)
+    require(
+        game.floor_objectives.state.components_collected == 2,
+        "Generator components were not both collected.",
+    )
+    require(game.floor_objectives.state.generator_ready, "Generator did not become repairable.")
+
+
+def repair_floor1_generator(game: Game) -> None:
+    require(game.floor_objectives is not None, "Floor 1 objectives were not created.")
+    place_player_at(game, game.floor_objectives.generator.tile)
+    for _ in range(4):
+        game.update_gameplay(
+            settings.GENERATOR_REPAIR_DURATION / 4.0,
+            pygame.Vector2(0, 0),
+            interact_held=True,
+        )
+    require(game.floor_objectives.state.generator_repaired, "Generator repair did not complete.")
+    require(game.floor_objectives.state.floor_power_active, "Generator repair did not restore floor power.")
+    require(game.floor_objectives.state.elevator_unlocked, "Generator repair did not unlock the elevator.")
+    require(game.floor_power_available, "Game floor power flag did not update after generator repair.")
+    require(game.elevator_entity is not None, "Elevator missing after generator repair.")
+    require(game.elevator_entity.state is ElevatorState.UNLOCKED, "Elevator state did not become UNLOCKED.")
+    generator_events = [
+        event for event in game.threat_events.active_events
+        if event.source_type is ThreatSourceType.GENERATOR
+    ]
+    require(len(generator_events) == 1, "Generator repair did not emit exactly one threat event.")
+    require(
+        generator_events[0].source_entity_id == game.floor_objectives.generator.unique_id,
+        "Generator threat event source did not match the generator.",
+    )
+
+
+def restore_floor1_power(game: Game) -> None:
+    collect_floor1_components(game)
+    repair_floor1_generator(game)
+
+
+def complete_floor1_objective(game: Game) -> None:
+    if game.floor_objectives is None or not game.floor_objectives.state.generator_repaired:
+        restore_floor1_power(game)
+    require(game.elevator_entity is not None, "Elevator missing before Floor 1 completion.")
+    place_player_at(game, game.elevator_entity.tile)
+    game.update_gameplay(0.0, pygame.Vector2(0, 0), interact_held=True)
+    require(game.state is GameState.WORKSHOP, "Unlocked elevator did not send the run to WORKSHOP.")
+    require(game.last_completed_floor == 1, "Floor completion marker was not recorded.")
+    require(game.player is None, "Floor completion did not clear the player runtime object.")
+    require(game.floor_objectives is None, "Floor completion retained Floor 1 objectives.")
+    require(game.floor_content is None, "Floor completion retained floor content.")
+    require(game.material_pickups == [], "Floor completion retained material pickup objects.")
+    require(game.creatures == [], "Floor completion retained creature objects.")
+    require(game.doors == [], "Floor completion retained dynamic doors.")
+    require(game.placeholder_run is not None, "Run missing after Floor 1 completion.")
+    require(game.placeholder_run.generated_floor is None, "Floor completion retained generated floor data.")
+    require(len(game.threat_events.active_events) == 0, "Floor completion retained active threat events.")
+
+
 def advance_until(game: Game, predicate, frames: int = 120) -> None:
     for _ in range(frames):
         game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
@@ -212,6 +281,13 @@ def main() -> int:
         require(game.doors, "Dynamic doors were not created.")
         require(game.material_pickups, "Material pickups were not created.")
         require(game.elevator_entity is not None, "Elevator entity was not created.")
+        require(game.floor_objectives is not None, "Floor 1 objectives were not created.")
+        require(not game.floor_power_available, "Floor 1 should start without power.")
+        require(game.elevator_entity.state is ElevatorState.LOCKED, "Floor 1 elevator should start locked.")
+        require(
+            game.floor_objectives.placement.validation_errors == [],
+            f"Floor 1 objective placement failed validation: {game.floor_objectives.placement.validation_errors}",
+        )
 
         directions = movement_directions_from_spawn(game)
         require(len(directions) >= 2, "Spawn did not expose two test movement directions.")
@@ -268,6 +344,18 @@ def main() -> int:
         require(game.performance_overlay, "F3 did not enable the performance overlay.")
         game.handle_keydown(pygame.K_F3)
         require(not game.performance_overlay, "F3 did not disable the performance overlay.")
+
+        offline_door = find_powered_door(game)
+        place_player_at(game, approach_tile_for_door(game, offline_door))
+        game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
+        require(
+            offline_door.state is DoorState.CLOSED,
+            "Powered door opened before generator power was restored.",
+        )
+        require(
+            game.dynamic_blockers.blocks_tile(*offline_door.tile, BlockerPurpose.MOVEMENT),
+            "Unpowered closed door did not block movement.",
+        )
 
         require(game.creatures, "No creature was created for the current floor.")
         creature = game.creatures[0]
@@ -372,6 +460,8 @@ def main() -> int:
         require(game.creatures[0].ai.selected_threat_event_id is None, "Retry retained selected threat ID.")
         require(game.creatures[0].ai.last_known_player_position is None, "Retry retained AI player memory.")
 
+        freeze_creatures(game)
+        restore_floor1_power(game)
         door = find_powered_door(game)
         place_player_at(game, approach_tile_for_door(game, door))
         game.update_gameplay(1.0 / settings.FPS, pygame.Vector2(0, 0))
@@ -440,6 +530,17 @@ def main() -> int:
         require(
             game.placeholder_run.material_counts == {"scrap": 0, "circuit": 0, "power_cell": 0},
             "Restart retained material counters.",
+        )
+
+        freeze_creatures(game)
+        complete_floor1_objective(game)
+        require(game.state is GameState.WORKSHOP, "Floor 1 completion did not end in WORKSHOP.")
+        require(
+            game.placeholder_run.score
+            >= settings.GENERATOR_COMPONENT_SCORE * 2
+            + settings.GENERATOR_REPAIR_SCORE
+            + settings.FLOOR_COMPLETION_SCORE,
+            "Floor 1 completion score rewards were not applied.",
         )
 
         game.request_quit()
