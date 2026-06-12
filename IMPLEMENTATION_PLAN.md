@@ -76,10 +76,14 @@ Doors are rendered separately from the cached static floor surface. The static t
 4. Phase 3: deterministic room-and-corridor generation with validation tests and debug world view.
 5. Phase 4: player movement, camera, tile collisions, doors, interactions and floor objectives.
 6. Phase 5: scan system with fixed origin, cached static raycasting, visual expansion, fade traces and no reveal through blockers.
-7. Phase 6: creatures, invisible movement, collision death, scan snapshots and threat investigation.
-8. Phase 7: three-floor run flow, floor transitions, objective scripts, extraction phase, death retry options and victory.
-9. Phase 8: workshop, materials and the four mandatory modules.
-10. Phase 9: polish, performance overlay, balancing, missing asset/audio fallback checks and final school requirement pass.
+7. Phase 6: dynamic doors and shared blocker interfaces.
+8. Phase 7: fixed-origin DDA scan and static traces.
+9. Phase 8: generic object echoes, materials and elevator scan states.
+10. Phase 9: moving invisible creature, dynamic creature echoes, death and restart.
+11. Phase 10: threat-aware creature AI and pathfinding.
+12. Phases 11-13: three floor objectives, extraction and victory.
+13. Phases 14-16: workshop, recipes and four active modules.
+14. Phases 17-20: HUD/effects, performance, QA and submission documentation.
 
 ## Automated Tests
 
@@ -121,3 +125,12 @@ Static geometry is raycast once when Space is pressed, never every frame. The ac
 - `ScanSystem.last_wave_step` exposes the previous/current wave annulus for one update, allowing object and future creature detection without recalculating static rays.
 - Run material counters remain simple dictionary data in `PlaceholderRun`; the later workshop can consume them without changing pickup behaviour.
 
+
+## Phase 9 Creature Architecture Notes
+
+- `game/entities/creature.py` owns deterministic patrol selection, cached animation/outline frames, bounded collision movement and simple BFS path generation. Pathfinding is event-driven rather than per-frame.
+- `game/systems/snapshots.py` compares relative wave/target distance between updates, allowing both front-overtakes-target and target-crosses-front cases without adding creatures to static raycasts.
+- Current line of sight always uses `game/systems/raycasting.py` and the authoritative `DynamicBlockerRegistry`.
+- `Game.update_gameplay` updates doors with player and creature occupancy, moves creatures, moves the player, checks contact at safe points, then advances scans and captures echoes.
+- Normal rendering excludes real creatures. F2 is the only world view that renders them directly; normal play receives copied snapshots only.
+- Phase 10 will layer threat events and AI states over this stable movement/snapshot foundation rather than replacing it.

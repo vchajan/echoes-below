@@ -13,7 +13,7 @@ Last updated: 2026-06-12
 - [x] Phase 6: Dynamic doors and shared blocker interfaces.
 - [x] Phase 7: Fixed-origin scan, DDA occlusion and fading static traces.
 - [x] Phase 8: Generic object echoes, material pickups and elevator scan states.
-- [ ] Phase 9: Moving invisible creature, dynamic creature snapshots, death and restart.
+- [x] Phase 9: Moving invisible creature, dynamic creature snapshots, death and restart.
 - [ ] Phase 10: Creature AI, threat events and pathfinding.
 - [ ] Phase 11: Floor 1 objective and workshop transition.
 - [ ] Phase 12: Floor 2 security objective.
@@ -334,6 +334,47 @@ Last updated: 2026-06-12
 - Added a scan-detectable elevator entity with locked, unlocked and active states, state-coloured outlines and an interaction region derived from validated elevator approach tiles.
 - Added F2 full-object diagnostics, F3 object-echo counters, snapshot reset on floor/run cleanup and a dedicated headless preview tool.
 - Current limitations reserved for later phases: no moving creature, creature collision death, objective items, floor progression, crafting or modules.
+
+## Phase 9 Notes
+
+- Added deterministic creature creation from validated spawn candidates. Floor 1 creates one creature; later floors create two when candidates are available. Creature IDs and per-creature RNG seeds are stable for a run seed and generation attempt.
+- Added `game/entities/creature.py` with cached sprite/outline frames, delta-time animation, collision Rects, bounded movement substeps and a simple deterministic BFS patrol. Paths are recalculated only after target changes or the creature becomes stuck; full threat-aware AI remains Phase 10.
+- Real creature sprites continue moving in darkness and are omitted from normal rendering. F2 shows their actual position, collision Rect, ID, tile, patrol target and current-scan processed state.
+- Extended the generic snapshot system with robust moving-front intersection logic. It detects both a wave overtaking a creature and a creature crossing outward through the wave between frames. Detection still requires current line of sight through the same wall, corner and door rules as DDA raycasting.
+- Creature echoes copy the exact current outline frame, facing and world position, remain stationary while the real creature continues moving, and fade after 1.5 seconds. One creature is evaluated at most once per scan; later scans may create a new echo.
+- Player contact now transitions to `DEATH` in the same gameplay update, including contact caused by player movement. The death screen shows actual floor, elapsed time, score, seed and the creature ID.
+- New Run, Retry Same Seed, Main Menu and floor cleanup discard creatures, scans, traces and snapshots. Retry Same Seed reproduces the same floor and creature spawn. Pause freezes creature movement, animation and snapshot lifetime because gameplay updates are not executed outside PLAYING.
+- Powered doors receive creature collision Rects during updates, so doors do not close through creatures.
+- Added F3 diagnostics for creature count, active creature echoes and IDs processed by the active scan.
+- Added deterministic headless creature preview screenshots for debug position, pre-scan darkness, detected snapshot, moved real creature with fixed snapshot and death screen.
+- Phase 10 still owns PATROL/INVESTIGATE/SEARCH/CHASE/STUNNED threat-aware AI, A* target pursuit and scan/noise reactions.
+
+## Phase 9 Created Or Updated Files
+
+- `game/entities/creature.py`
+- `game/systems/snapshots.py`
+- `game/settings.py`
+- `game/app.py`
+- `tests/test_creature.py`
+- `tests/test_creature_movement.py`
+- `tests/test_creature_snapshots.py`
+- `tests/test_death_restart.py`
+- `tools/creature_preview.py`
+- `tools/smoke_test.py`
+- `.gitignore`
+- `README.md`
+- `IMPLEMENTATION_PLAN.md`
+- `PROGRESS.md`
+
+## Phase 9 Test Results
+
+- `python -m unittest discover -s tests`: passed with 248 tests.
+- `python tools/smoke_test.py`: passed, including creature echo capture, stationary snapshot, immediate contact death and same-seed retry cleanup.
+- `python tools/creature_preview.py --seed 12345 --floor 1 --headless`: passed and generated five deterministic screenshots under `artifacts/`.
+- `python tools/snapshot_preview.py --seed 12345 --floor 1 --headless`: passed.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average 21.384 ms, median 20.320 ms and maximum 30.387 ms in this container run.
+- `python -m py_compile main.py` and `python -c "import main; print('main import ok')"`: passed.
+- The 450-floor `tools/generation_test.py` is unchanged by Phase 9 and should be rerun on the target Windows machine before commit.
 
 ## Phase 8 Created Or Updated Files
 

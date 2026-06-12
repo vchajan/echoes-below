@@ -77,6 +77,30 @@ class SnapshotDiagnostics:
     active_snapshots: int = 0
 
 
+
+
+def wave_intersects_moving_distance(
+    previous_radius: float,
+    current_radius: float,
+    previous_distance: float,
+    current_distance: float,
+    *,
+    epsilon: float = 1e-7,
+) -> bool:
+    """Return True when an expanding front and a moving radial target intersect.
+
+    Comparing relative distance catches both cases required by the game:
+    the front overtakes a target, or a fast target crosses outward through
+    the front between updates. A target that was already behind the front
+    and remains there is not evaluated late.
+    """
+    previous_relative = previous_distance - previous_radius
+    current_relative = current_distance - current_radius
+    if abs(previous_relative) <= epsilon or abs(current_relative) <= epsilon:
+        return True
+    return (previous_relative > 0 > current_relative) or (previous_relative < 0 < current_relative)
+
+
 class EchoSnapshotSystem:
     """Captures scan-detectable entities exactly when the wave front overtakes them."""
 
@@ -116,10 +140,12 @@ class EchoSnapshotSystem:
             previous_distance = self._previous_distances.get(key, current_distance)
             self._previous_distances[key] = current_distance
 
-            front_was_before = previous_distance > wave_step.previous_radius + 1e-7
-            front_is_at_or_past = current_distance <= wave_step.current_radius + 1e-7
-            at_origin_on_first_step = current_distance <= 1e-7 and wave_step.previous_radius <= 1e-7
-            if not ((front_was_before and front_is_at_or_past) or at_origin_on_first_step):
+            if not wave_intersects_moving_distance(
+                wave_step.previous_radius,
+                wave_step.current_radius,
+                previous_distance,
+                current_distance,
+            ):
                 continue
 
             evaluated.add(entity.unique_id)
@@ -150,6 +176,12 @@ class EchoSnapshotSystem:
 
     def snapshots_for_source(self, source_id: str) -> list[EchoSnapshot]:
         return [snapshot for snapshot in self.snapshots if snapshot.source_id == source_id]
+
+    def processed_ids_for_scan(self, scan_id: int) -> frozenset[str]:
+        return frozenset(self._evaluated_by_scan.get(scan_id, set()))
+
+    def snapshot_count_for_category(self, category: str) -> int:
+        return sum(1 for snapshot in self.snapshots if snapshot.category == category)
 
     def _prune_scan_state(self, newest_scan_id: int) -> None:
         minimum_scan_id = max(0, newest_scan_id - 3)
