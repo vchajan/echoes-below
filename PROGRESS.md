@@ -14,7 +14,7 @@ Last updated: 2026-06-12
 - [x] Phase 7: Fixed-origin scan, DDA occlusion and fading static traces.
 - [x] Phase 8: Generic object echoes, material pickups and elevator scan states.
 - [x] Phase 9: Moving invisible creature, dynamic creature snapshots, death and restart.
-- [ ] Phase 10: Creature AI, threat events and pathfinding.
+- [x] Phase 10: Creature AI, threat events and pathfinding.
 - [ ] Phase 11: Floor 1 objective and workshop transition.
 - [ ] Phase 12: Floor 2 security objective.
 - [ ] Phase 13: Floor 3 Echo Core extraction and victory.
@@ -375,6 +375,60 @@ Last updated: 2026-06-12
 - `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average 21.384 ms, median 20.320 ms and maximum 30.387 ms in this container run.
 - `python -m py_compile main.py` and `python -c "import main; print('main import ok')"`: passed.
 - The 450-floor `tools/generation_test.py` is unchanged by Phase 9 and should be rerun on the target Windows machine before commit.
+
+## Phase 10 Baseline Before Editing
+
+- `python -m unittest discover -s tests`: passed with 248 tests.
+- `python tools/smoke_test.py`: passed.
+- `python tools/generation_test.py`: passed for 450 generated floors, 0 failures, retries used 104, maximum attempt index 4, average attempt index 1.313, average room count 11.816, cycle rank distribution `{1: 150, 2: 300}`, average connectivity ratio 1.000 and total execution time 62.501s.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average raycast 36.596 ms, median 33.627 ms and maximum 69.450 ms in this run.
+- `python tools/creature_preview.py --seed 12345 --floor 1 --headless`: passed and wrote debug, before-scan, snapshot, moved and death previews under `artifacts/`.
+- `python -m py_compile main.py`: passed.
+
+## Phase 10 Notes
+
+- Added `game/systems/threat_events.py` with stable event IDs, source types, age/lifetime handling, pause-safe updates, bounded active storage, reset cleanup, source counts and relevance selection.
+- Added `game/systems/creature_ai.py` with the authoritative `CreatureState` enum: `PATROL`, `INVESTIGATE`, `SEARCH`, `CHASE` and `STUNNED`.
+- Added deterministic four-directional A* utilities to `game/world/navigation.py`, including Manhattan heuristic, neighbour filtering, path reconstruction, path validity checks and nearest reachable fallback.
+- `Creature` remains the physical body for sprite frames, collision Rects, movement and scan snapshots. Attached `CreatureAI` objects own decisions, targets, timers, perception, path memory, stun state and diagnostics.
+- `Game` owns one shared `ThreatEventSystem`. A successful Space scan creates exactly one `PLAYER_SCAN` event at the fixed scan origin while the existing static DDA scan, traces and moving-creature snapshots stay separate.
+- AI perception uses the existing `has_line_of_sight` implementation and the shared dynamic door blocker registry. Closed, locked and wedged-closed doors block movement, navigation and visibility; open and wedged-open doors allow them.
+- Pathfinding is throttled per state. Repathing happens on state entry, target change, invalid path, stuck movement or limited chase refresh, not every frame.
+- F2 debug now draws AI state, previous state, transition reason, path tiles, target marker, selected threat, search centre, last known player marker, stun timer and recent LOS result.
+- F3 diagnostics now include state counts, active threat counts, threat source counts, pathfinding calls, calls per second, path timing, active path nodes, perception checks per second and stunned creature count.
+- Added deterministic `tools/ai_preview.py` with headless screenshots for PATROL, INVESTIGATE, SEARCH, CHASE and STUNNED.
+- Extended `tools/smoke_test.py` to cover PATROL, scan threat creation, INVESTIGATE, SEARCH, CHASE, last-known-player memory, direct stun, pause freeze, stun expiry, contact death and retry cleanup.
+- Current limitations: floor objectives, generator repair, relay activation, Echo Core extraction, crafting, active modules, Shock Pulse input, Decoy Beacon gameplay, Door Wedge gameplay, Scan Projector gameplay, final HUD and score balancing remain future phases.
+
+## Phase 10 Created Or Updated Files
+
+- `game/systems/threat_events.py`
+- `game/systems/creature_ai.py`
+- `game/world/navigation.py`
+- `game/entities/creature.py`
+- `game/systems/__init__.py`
+- `game/settings.py`
+- `game/app.py`
+- `tests/test_threat_events.py`
+- `tests/test_navigation.py`
+- `tests/test_creature_ai.py`
+- `tools/ai_preview.py`
+- `tools/smoke_test.py`
+- `README.md`
+- `PROGRESS.md`
+
+## Phase 10 Test Results
+
+- `python -m unittest discover -s tests`: passed with 302 tests in 20.112s.
+- `python tools/smoke_test.py`: passed.
+- `python tools/generation_test.py`: passed for 450 generated floors, 0 failures, retries used 104, maximum attempt index 4, average attempt index 1.313, average room count 11.816, cycle rank distribution `{1: 150, 2: 300}`, average connectivity ratio 1.000 and total execution time 51.565s.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average raycast 29.510 ms, median 26.872 ms, maximum 44.052 ms, average raw hits 712.4, average deduplicated hits 562.0 and total seconds 2.631.
+- `python tools/snapshot_preview.py --seed 12345 --floor 1 --headless`: passed and wrote `artifacts/snapshot_preview_12345_floor1_detected.png`, `artifacts/snapshot_preview_12345_floor1_collected.png`, `artifacts/snapshot_preview_12345_floor1_fading.png` and `artifacts/snapshot_preview_12345_floor1_expired.png`; material count was `{'scrap': 0, 'circuit': 0, 'power_cell': 1}`, score was 5 and active snapshots ended at 0.
+- `python tools/creature_preview.py --seed 12345 --floor 1 --headless`: passed and wrote `artifacts/creature_preview_12345_floor1_debug.png`, `artifacts/creature_preview_12345_floor1_before_scan.png`, `artifacts/creature_preview_12345_floor1_snapshot.png`, `artifacts/creature_preview_12345_floor1_moved.png` and `artifacts/creature_preview_12345_floor1_death.png`; creature spawn `(18, 41)`, moved tile `(19, 41)`, snapshot count 1 and snapshot stationary `True`.
+- `python tools/ai_preview.py --seed 12345 --floor 1 --headless`: passed and wrote `artifacts/ai_preview_12345_floor1_patrol.png`, `artifacts/ai_preview_12345_floor1_investigate.png`, `artifacts/ai_preview_12345_floor1_search.png`, `artifacts/ai_preview_12345_floor1_chase.png` and `artifacts/ai_preview_12345_floor1_stunned.png`; transition sequence `PATROL -> INVESTIGATE -> SEARCH -> CHASE -> STUNNED`, threat event IDs `[1]`, pathfinding calls 3, path lengths `{'investigate': 2, 'search': 0, 'chase': 2}`, last known player position `(840.0, 1896.0)`, A* throttled `True` and reset cleaned AI state `True`.
+- `python -m py_compile main.py`: passed.
+- `python -c "import main; print('main import ok')"`: passed with output `main import ok`.
+- `python -m compileall -q main.py game tests tools`: passed.
 
 ## Phase 8 Created Or Updated Files
 

@@ -14,6 +14,8 @@ from game.world import collision
 from game.world.blockers import BlockerPurpose
 
 if TYPE_CHECKING:
+    from game.entities.player import Player
+    from game.systems.threat_events import ThreatEventSystem
     from game.world.blockers import DynamicBlockerRegistry
     from game.world.floor import GeneratedFloor
 
@@ -85,6 +87,7 @@ class Creature(pygame.sprite.Sprite):
         self._repath_cooldown = 0.0
         self._stuck_elapsed = 0.0
         self._last_world_position = self.world_position.copy()
+        self.ai = None
 
     @property
     def feet_position(self) -> pygame.Vector2:
@@ -100,6 +103,8 @@ class Creature(pygame.sprite.Sprite):
 
     @property
     def patrol_target(self) -> tuple[int, int] | None:
+        if self.ai is not None:
+            return self.ai.current_patrol_target
         return self.current_waypoint
 
     @property
@@ -118,17 +123,31 @@ class Creature(pygame.sprite.Sprite):
         self.current_path.clear()
         self._stuck_elapsed = 0.0
         self._sync_rects_from_world()
+        if self.ai is not None:
+            self.ai.on_creature_repositioned()
 
     def set_world_position(self, position: pygame.Vector2 | tuple[float, float]) -> None:
         """Test/preview helper that preserves all Rect invariants."""
         self.world_position = pygame.Vector2(position)
         self._sync_rects_from_world()
+        if self.ai is not None:
+            self.ai.on_creature_repositioned()
+
+    def stun(self, duration: float) -> None:
+        if self.ai is None:
+            raise RuntimeError("Creature AI is not attached.")
+        self.ai.apply_stun(duration)
 
     def update(
         self,
         dt: float,
         generated_floor: GeneratedFloor,
         dynamic_blockers: DynamicBlockerRegistry | None = None,
+        *,
+        player: Player | None = None,
+        threat_events: ThreatEventSystem | None = None,
+        session_time: float = 0.0,
+        paused: bool = False,
     ) -> None:
         dt = max(0.0, dt)
         self._repath_cooldown = max(0.0, self._repath_cooldown - dt)
@@ -138,6 +157,18 @@ class Creature(pygame.sprite.Sprite):
             self.velocity.update(0, 0)
             self.moving = False
             self._sync_rects_from_world()
+            return
+
+        if self.ai is not None:
+            self.ai.update(
+                dt,
+                generated_floor,
+                dynamic_blockers,
+                player=player,
+                threat_events=threat_events,
+                session_time=session_time,
+                paused=paused,
+            )
             return
 
         self._ensure_patrol_path(generated_floor, dynamic_blockers)
@@ -163,11 +194,11 @@ class Creature(pygame.sprite.Sprite):
         self.image = animation.current_frame
         self._sync_rects_from_world()
 
-    def set_movement_direction(self, direction: pygame.Vector2) -> pygame.Vector2:
+    def set_movement_direction(self, direction: pygame.Vector2, *, speed: float | None = None) -> pygame.Vector2:
         direction = pygame.Vector2(direction)
         if direction.length_squared() > 1.0:
             direction = direction.normalize()
-        self.velocity = direction * self.speed
+        self.velocity = direction * (self.speed if speed is None else speed)
         self.moving = direction.length_squared() > 1e-8
         if self.moving:
             self._update_facing(direction)
