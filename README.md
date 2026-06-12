@@ -2,7 +2,7 @@
 
 Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is currently in Phase 2. It contains the application shell, state system, asset manager, generated placeholder spritesheets, placeholder screens, tests and a headless smoke test. Full gameplay systems are planned for later phases.
+This repository is currently in Phase 3. It contains the application shell, state system, asset manager, generated placeholder spritesheets, seeded procedural floor generation, placeholder screens, tests and headless verification tools. Full gameplay systems are planned for later phases.
 
 ## Setup
 
@@ -29,6 +29,7 @@ python main.py
 - Mouse: hover and click buttons
 - Escape: skip splash, pause from the playing placeholder, resume from pause or return from How to Play
 - Backspace: return from How to Play
+- F2: toggle procedural floor debug overlay in the playing placeholder
 
 Planned gameplay controls:
 
@@ -48,6 +49,8 @@ python tools/generate_placeholder_assets.py
 python -m unittest discover -s tests
 python tools/smoke_test.py
 python tools/asset_preview.py --headless
+python tools/generation_sweep.py
+python tools/generation_preview.py --seed 12345 --floor 1 --headless
 python -m py_compile main.py
 python -c "import main; print('main import ok')"
 ```
@@ -92,6 +95,41 @@ python tools/asset_preview.py --headless
 ```
 
 The preview is saved to `artifacts/asset_preview.png`.
+
+## Procedural Generation
+
+Phase 3 adds a deterministic room-and-corridor floor generator. It uses a local `random.Random` instance, so a supplied seed, floor number and generator configuration produce the same room rectangles, graph edges, corridors, tile grid, player spawn and elevator tile.
+
+New Run currently generates a Floor 1 debug overview. The map is shown as a temporary scaled preview using the Phase 2 industrial tileset. This is not the final gameplay camera, and there is no player movement yet.
+
+Tile types are centralised in `game/world/tiles.py`:
+
+- `VOID`
+- `FLOOR`
+- `FLOOR_ALT`
+- `DAMAGED_FLOOR`
+- `WALL`
+- `DAMAGED_WALL`
+- `OBSTACLE`
+- `PILLAR`
+- `DOORWAY`
+- `ELEVATOR_FLOOR`
+
+Each tile definition exposes walkability, movement blocking, scan blocking and tileset asset index.
+
+Create a headless generation preview with:
+
+```powershell
+python tools/generation_preview.py --seed 12345 --floor 1 --headless
+```
+
+The preview is saved to `artifacts/generation_preview_12345_floor1.png`.
+
+Run the Phase 3 lightweight seed sweep with:
+
+```powershell
+python tools/generation_sweep.py
+```
 
 ## Documentation
 

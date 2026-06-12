@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Any
 
 
 class GameState(Enum):
@@ -23,6 +24,7 @@ class PlaceholderRun:
     score: int = 0
     elapsed_time: float = 0.0
     restart_count: int = 0
+    generated_floor: Any | None = None
 
     def reset_same_seed(self) -> "PlaceholderRun":
         return PlaceholderRun(

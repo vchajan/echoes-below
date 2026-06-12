@@ -6,6 +6,8 @@ from game.assets import EFFECT_IMAGE_PATHS, MODULE_ICON_PATHS, AssetManager
 from game import settings
 from game.states import GameState, PlaceholderRun
 from game.ui.buttons import Button
+from game.world.generator import FloorGenerator, GenerationError
+from game.world.rendering import draw_debug_overlay, render_floor_surface, scale_floor_surface
 
 
 class Game:
@@ -21,6 +23,12 @@ class Game:
         self.assets = AssetManager(audio_available=self.audio_available)
         self.visual_assets = self._load_visual_assets()
         self.overlay_surface = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
+        self.floor_generator = FloorGenerator()
+        self.debug_world_view = False
+        self.floor_world_surface: pygame.Surface | None = None
+        self.floor_preview_surface: pygame.Surface | None = None
+        self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
+        self.generation_error: str | None = None
 
         self.running = True
         self._shutdown_complete = False
@@ -157,6 +165,10 @@ class Game:
             self.handle_mouse_button(event)
 
     def handle_keydown(self, key: int) -> None:
+        if key == pygame.K_F2:
+            self.debug_world_view = not self.debug_world_view
+            return
+
         if self.state == GameState.SPLASH:
             if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE, pygame.K_ESCAPE):
                 self.transition_to(GameState.MAIN_MENU)
@@ -232,6 +244,9 @@ class Game:
         elif action == "continue_floor":
             if self.placeholder_run is not None:
                 self.placeholder_run.floor += 1
+                self.placeholder_run.generated_floor = None
+                self.floor_world_surface = None
+                self.floor_preview_surface = None
             self.transition_to(GameState.FLOOR_TRANSITION)
         elif action == "retry_seed":
             self.retry_same_seed()
@@ -258,11 +273,15 @@ class Game:
             self.splash_elapsed = 0.0
         elif new_state == GameState.FLOOR_TRANSITION:
             self.floor_transition_elapsed = 0.0
+        elif new_state == GameState.PLAYING and self.placeholder_run is not None:
+            if self.placeholder_run.generated_floor is None:
+                self.prepare_generated_floor()
 
     def start_new_run(self) -> None:
         self.next_seed += 1
         self.placeholder_run = PlaceholderRun(seed=self.next_seed)
         self.run_exists = True
+        self.prepare_generated_floor()
         self.transition_to(GameState.PLAYING)
 
     def restart_placeholder_run(self) -> None:
@@ -271,6 +290,7 @@ class Game:
         else:
             self.placeholder_run = self.placeholder_run.reset_same_seed()
         self.run_exists = True
+        self.prepare_generated_floor()
         self.transition_to(GameState.PLAYING)
 
     def retry_same_seed(self) -> None:
@@ -278,9 +298,35 @@ class Game:
 
     def end_placeholder_run(self) -> None:
         self.run_exists = False
+        self.floor_world_surface = None
+        self.floor_preview_surface = None
+        self.floor_preview_rect = pygame.Rect(0, 0, 0, 0)
+        self.generation_error = None
 
     def request_quit(self) -> None:
         self.running = False
+
+    def prepare_generated_floor(self) -> None:
+        if self.placeholder_run is None:
+            return
+        try:
+            generated_floor = self.floor_generator.generate(
+                seed=self.placeholder_run.seed,
+                floor_number=self.placeholder_run.floor,
+            )
+        except GenerationError as exc:
+            self.generation_error = str(exc)
+            self.placeholder_run.generated_floor = None
+            self.floor_world_surface = None
+            self.floor_preview_surface = None
+            return
+
+        self.generation_error = None
+        self.placeholder_run.generated_floor = generated_floor
+        tile_size = self.floor_generator.config_for_floor(self.placeholder_run.floor).tile_size
+        self.floor_world_surface = render_floor_surface(generated_floor, self.assets, tile_size)
+        self.floor_preview_surface, _ = scale_floor_surface(self.floor_world_surface, (980, 520))
+        self.floor_preview_rect = self.floor_preview_surface.get_rect(center=(settings.WINDOW_WIDTH // 2, 410))
 
     def shutdown(self) -> None:
         if self._shutdown_complete:
@@ -370,21 +416,24 @@ class Game:
 
     def render_playing(self) -> None:
         self.draw_background()
-        self.draw_placeholder_asset_scene()
-        self.draw_centered_text("Gameplay systems under construction", "subtitle", settings.COLOR_TEXT, 235)
-        self.draw_centered_text("Current state: PLAYING", "body", settings.COLOR_ACCENT, 295)
-        self.draw_centered_text("Press Escape to pause", "body", settings.COLOR_TEXT_MUTED, 345)
+        self.render_generated_floor_preview()
+        self.draw_centered_text("Procedural floor preview", "subtitle", settings.COLOR_TEXT, 50)
+        self.draw_centered_text("Gameplay systems under construction", "body", settings.COLOR_ACCENT, 92)
 
         if self.placeholder_run is not None:
-            run_line = (
-                f"Floor {self.placeholder_run.floor} | "
-                f"Seed {self.placeholder_run.seed} | "
-                f"Score {self.placeholder_run.score} | "
-                f"Time {self.placeholder_run.elapsed_time:0.1f}s"
-            )
+            generated_floor = self.placeholder_run.generated_floor
+            if generated_floor is not None:
+                run_line = (
+                    f"Floor {self.placeholder_run.floor} | Seed {self.placeholder_run.seed} | "
+                    f"Rooms {len(generated_floor.rooms)} | Graph edges {len(generated_floor.graph_edges)} | "
+                    f"Time {self.placeholder_run.elapsed_time:0.1f}s"
+                )
+            else:
+                run_line = f"Floor {self.placeholder_run.floor} | Seed {self.placeholder_run.seed} | generation unavailable"
         else:
             run_line = "No active placeholder run"
-        self.draw_centered_text(run_line, "small", settings.COLOR_TEXT_MUTED, 395)
+        self.draw_centered_text(run_line, "small", settings.COLOR_TEXT_MUTED, 124)
+        self.draw_centered_text("Escape pauses | F2 toggles room graph and candidate overlays", "small", settings.COLOR_TEXT_MUTED, 672)
 
     def render_paused(self) -> None:
         self.render_playing()
@@ -478,6 +527,30 @@ class Game:
         selected_index = self.selected_indices.get(state, 0)
         for index, button in enumerate(group):
             button.draw(self.screen, self.fonts["button"], selected=index == selected_index)
+
+    def render_generated_floor_preview(self) -> None:
+        if self.generation_error is not None:
+            self.draw_centered_text(f"Generation error: {self.generation_error}", "small", settings.COLOR_WARNING, 420)
+            return
+
+        if (
+            self.placeholder_run is None
+            or self.placeholder_run.generated_floor is None
+            or self.floor_preview_surface is None
+        ):
+            self.draw_placeholder_asset_scene()
+            return
+
+        self.screen.blit(self.floor_preview_surface, self.floor_preview_rect)
+        pygame.draw.rect(self.screen, settings.COLOR_ACCENT_DIM, self.floor_preview_rect, width=2, border_radius=4)
+
+        if self.debug_world_view:
+            draw_debug_overlay(
+                self.screen,
+                self.placeholder_run.generated_floor,
+                self.floor_preview_rect,
+                self.fonts["small"],
+            )
 
     def draw_placeholder_asset_scene(self) -> None:
         tiles = self.visual_assets["tiles"]

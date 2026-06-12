@@ -7,7 +7,7 @@ Last updated: 2026-06-12
 - [x] Phase 0: Planning documentation, requirements file and repository bootstrap.
 - [x] Phase 1: Minimal Pygame shell, splash screen, automatic menu transition and Play button.
 - [x] Phase 2: Asset manager, spritesheets, tiles, animations and visible score HUD.
-- [ ] Phase 3: Seeded room-and-corridor procedural generation with validation.
+- [x] Phase 3: Seeded room-and-corridor procedural generation with validation.
 - [ ] Phase 4: Player movement, keyboard input, collisions, doors and objective interactions.
 - [ ] Phase 5: Fixed-origin scan with occlusion, expansion and fading traces.
 - [ ] Phase 6: Creature movement, collision death and scan snapshots.
@@ -60,3 +60,34 @@ Last updated: 2026-06-12
 - `python tools/asset_preview.py --headless`: passed.
 - `python -m py_compile main.py`: passed.
 - Preview confirmed at `artifacts/asset_preview.png`.
+
+## Phase 3 Notes
+
+- Implemented `game/world/` with central tile definitions, room rectangles, generated floor data, deterministic room-and-corridor generation and temporary overview rendering helpers.
+- Added seeded local-RNG generation for room placement, graph edges, L-shaped corridors, wall shells, restrained floor/wall variants, basic obstacles, player spawn, elevator floor, doorway candidates and candidate rooms/spawns for later phases.
+- Integrated the generated Floor 1 preview into the `PLAYING` placeholder after New Run. The preview is pre-rendered into a cached surface and uses the Phase 2 industrial tileset.
+- Added F2 debug overlays for room rectangles, IDs, centres, graph edges, player spawn, elevator, doorway candidates and creature-spawn candidates.
+- Added `tools/generation_preview.py` and `tools/generation_sweep.py`.
+- Current limitations reserved for later phases: no player movement, camera, dynamic doors, final objectives, materials placement, scan raycasting, creature AI, combat-like systems, or full Phase 4 connectivity stress validation.
+
+## Phase 3 Created Files
+
+- `game/world/__init__.py`
+- `game/world/tiles.py`
+- `game/world/room.py`
+- `game/world/floor.py`
+- `game/world/generator.py`
+- `game/world/rendering.py`
+- `tests/test_generator.py`
+- `tools/generation_preview.py`
+- `tools/generation_sweep.py`
+
+## Phase 3 Test Results
+
+- Baseline before editing: `python tools/generate_placeholder_assets.py`, `python -m unittest discover -s tests`, `python tools/smoke_test.py` and `python -m py_compile main.py` all passed.
+- `python -m unittest discover -s tests`: passed, 49 tests.
+- `python tools/smoke_test.py`: passed.
+- `python tools/generation_sweep.py`: passed for 50 Floor 1 seeds.
+- `python tools/generation_preview.py --seed 12345 --floor 1 --headless`: passed.
+- `python -m py_compile main.py`: passed.
+- Preview confirmed at `artifacts/generation_preview_12345_floor1.png`.
