@@ -13,7 +13,8 @@ from game.entities.player import Player, movement_direction_from_bools
 from game import settings
 from game.systems.creature_ai import CreatureAI, CreatureState
 from game.systems.crafting import WorkshopAction, WorkshopSystem
-from game.systems.modules import MODULE_BY_VALUE, MODULE_DEFINITIONS
+from game.systems.modules import MODULE_BY_VALUE, MODULE_DEFINITIONS, ModuleType
+from game.systems.module_effects import ModuleEffectSystem
 from game.systems.floor_objectives import Floor1ObjectiveSystem, Floor2ObjectiveSystem
 from game.systems.floor3_objectives import Floor3ObjectiveSystem
 from game.systems.scan import ScanRenderer, ScanSystem
@@ -50,6 +51,12 @@ class Game:
         self.fonts = self._load_fonts()
         self.assets = AssetManager(audio_available=self.audio_available)
         self.visual_assets = self._load_visual_assets()
+        effect_icons = self.visual_assets["effect_icons"]
+        effect_outlines = self.visual_assets["effect_outlines"]
+        assert isinstance(effect_icons, dict) and isinstance(effect_outlines, dict)
+        self.module_effects = ModuleEffectSystem(effect_icons, effect_outlines)
+        self.module_notice = ""
+        self.module_notice_remaining = 0.0
         self.overlay_surface = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
         self.darkness_surface = pygame.Surface(settings.WINDOW_SIZE, pygame.SRCALPHA)
         self.local_glow_surface = build_local_glow_surface(settings.LOCAL_VISIBILITY_RADIUS)
@@ -156,6 +163,9 @@ class Game:
             "effect_icons": {
                 name: self.assets.load_image(path, (64, 64)) for name, path in EFFECT_IMAGE_PATHS.items()
             },
+            "effect_outlines": {
+                name: self.assets.get_outline_image(path, (64, 64)) for name, path in EFFECT_IMAGE_PATHS.items()
+            },
         }
 
         outline_sheet_names = [
@@ -249,6 +259,10 @@ class Game:
         if self.state == GameState.PLAYING:
             if key == pygame.K_SPACE:
                 self.trigger_scan()
+            elif key == pygame.K_q:
+                self.activate_module_slot(0)
+            elif key == pygame.K_e:
+                self.activate_module_slot(1)
             elif key == pygame.K_ESCAPE:
                 self.transition_to(GameState.PAUSED)
             return
@@ -380,6 +394,41 @@ class Game:
         elif activation.action is WorkshopAction.MAIN_MENU:
             self.perform_action("main_menu")
 
+    def activate_module_slot(self, slot_index: int) -> bool:
+        if (
+            self.state is not GameState.PLAYING
+            or self.placeholder_run is None
+            or self.placeholder_run.generated_floor is None
+            or self.player is None
+        ):
+            return False
+        if slot_index not in (0, 1):
+            raise IndexError("Module slot must be 0 or 1.")
+        value = self.placeholder_run.module_loadout.equipped_slots[slot_index]
+        if value not in MODULE_BY_VALUE:
+            self._set_module_notice(f"Slot {'Q' if slot_index == 0 else 'E'} is empty")
+            return False
+        module_type = MODULE_BY_VALUE[value].module_type
+        result = self.module_effects.activate(
+            module_type,
+            runtime=self.placeholder_run.module_runtime,
+            player_position=self.player.world_position.copy(),
+            floor=self.placeholder_run.generated_floor,
+            blockers=self.dynamic_blockers,
+            doors=self.doors,
+            creatures=self.creatures,
+            scan_system=self.scan_system,
+            threat_events=self.threat_events,
+            session_time=self.placeholder_run.elapsed_time,
+            floor_number=self.placeholder_run.floor,
+        )
+        self._set_module_notice(result.message)
+        return result.success
+
+    def _set_module_notice(self, text: str) -> None:
+        self.module_notice = text
+        self.module_notice_remaining = settings.MODULE_NOTICE_DURATION if text else 0.0
+
     def update(self, dt: float) -> None:
         if self.state == GameState.SPLASH:
             self.splash_elapsed += dt
@@ -411,6 +460,11 @@ class Game:
         if self._player_touches_creature():
             self._enter_death_state()
             return
+
+        self.placeholder_run.module_runtime.update(dt)
+        self.module_notice_remaining = max(0.0, self.module_notice_remaining - max(0.0, dt))
+        if self.module_notice_remaining <= 0.0:
+            self.module_notice = ""
 
         keys = None
         if movement_direction is None or interact_held is None:
@@ -444,6 +498,15 @@ class Game:
         if self.floor_content is not None:
             self.floor_content.update(dt)
 
+        self.module_effects.update(
+            dt,
+            floor=self.placeholder_run.generated_floor,
+            blockers=self.dynamic_blockers,
+            scan_system=self.scan_system,
+            threat_events=self.threat_events,
+            session_time=self.placeholder_run.elapsed_time,
+            floor_number=self.placeholder_run.floor,
+        )
         self.threat_events.update(dt)
         for creature in self.creatures:
             creature.update(
@@ -525,6 +588,7 @@ class Game:
         if self.floor_objectives is not None:
             self.floor_objectives.clear_interaction()
             self.floor_objectives.reset_messages()
+        self._set_module_notice("")
         self.transition_to(GameState.DEATH)
 
     def scan_detectable_entities(self) -> list[object]:
@@ -534,6 +598,7 @@ class Game:
         if self.floor_objectives is not None:
             entities.extend(self.floor_objectives.scan_entities)
         entities.extend(self.creatures)
+        entities.extend(self.module_effects.scan_entities)
         return entities
 
     def collect_material_pickups(self) -> None:
@@ -644,6 +709,8 @@ class Game:
         self.scan_system.reset()
         self.threat_events.reset()
         self.snapshot_system.reset()
+        self.module_effects.reset_floor()
+        self._set_module_notice("")
         self.world_renderer.clear()
 
     def request_quit(self) -> None:
@@ -653,6 +720,8 @@ class Game:
         self.scan_system.reset()
         self.threat_events.reset()
         self.snapshot_system.reset()
+        self.module_effects.reset_floor()
+        self._set_module_notice("")
         self.floor_objectives = None
         if self.placeholder_run is None:
             return
@@ -900,6 +969,8 @@ class Game:
         self.scan_system.reset()
         self.threat_events.reset()
         self.snapshot_system.reset()
+        self.module_effects.reset_floor()
+        self._set_module_notice("")
         self.world_renderer.clear()
 
     def nearest_door(self, door_type: DoorType | None = None) -> DynamicDoor | None:
@@ -986,8 +1057,8 @@ class Game:
             "WASD or arrow keys: move",
             "Space: scan",
             "F: interact",
-            "Q: module slot 1",
-            "E: module slot 2",
+            "Q: activate module slot 1",
+            "E: activate module slot 2",
             "Escape: pause",
             "F2: debug view",
             "F3: performance overlay",
@@ -998,7 +1069,8 @@ class Game:
             "Creature images are fading snapshots of previous detected positions.",
             "Touching a creature ends the run.",
             "Complete the floor objective and reach the elevator.",
-            "Modules are crafted between floors.",
+            "Modules are crafted between floors and have independent cooldowns.",
+            "Pulse stuns; Decoy distracts; Wedge locks a door; Projector scans remotely.",
             "",
             "Escape or Backspace returns to the main menu.",
         ]
@@ -1028,6 +1100,7 @@ class Game:
         generated_floor = self.placeholder_run.generated_floor
         self.world_renderer.render_view(self.screen, generated_floor, self.camera)
         draw_doors(self.screen, self.doors, self.camera)
+        self.module_effects.render_devices(self.screen, self.camera)
         if self.debug_world_view and self.floor_content is not None:
             draw_floor_content_debug(self.screen, self.floor_content, self.camera, self.fonts["small"])
         if self.debug_world_view and self.floor_objectives is not None:
@@ -1043,6 +1116,7 @@ class Game:
             )
             self.scan_renderer.render(self.screen, self.scan_system, self.camera)
             self.snapshot_renderer.render(self.screen, self.snapshot_system.snapshots, self.camera)
+            self.module_effects.render_effects(self.screen, self.camera)
             draw_material_contact_hints(
                 self.screen,
                 self.material_pickups,
@@ -1054,6 +1128,7 @@ class Game:
         else:
             self.scan_renderer.render(self.screen, self.scan_system, self.camera)
             self.snapshot_renderer.render(self.screen, self.snapshot_system.snapshots, self.camera)
+            self.module_effects.render_effects(self.screen, self.camera)
             self.screen.blit(self.player.image, player_screen_rect)
             
             # Real creatures are visible only in F2 debug mode.
@@ -1469,59 +1544,85 @@ class Game:
     def draw_gameplay_hud(self) -> None:
         if self.placeholder_run is None or self.player is None:
             return
-        objective_lines: list[str] = []
+        run = self.placeholder_run
+        objective_heading = "EXPLORE"
+        objective_text = "Find the elevator objective"
         prompt_line = ""
         if self.floor_objectives is not None:
             state = self.floor_objectives.state
-            if state.floor_number == 3:
-                heading = "ECHO CORE EXTRACTION"
-            elif state.floor_number == 2:
-                heading = "SECURITY OVERRIDE"
-            else:
-                heading = "RESTORE POWER"
-            objective_lines = [
-                heading,
-                state.current_objective_text,
-            ]
-            if state.current_prompt:
-                prompt_line = state.current_prompt
-        hud_lines = [
-            f"Floor {self.placeholder_run.floor}",
-            f"Seed {self.placeholder_run.seed}",
-            f"World ({self.player.world_position.x:0.1f}, {self.player.world_position.y:0.1f})",
-            f"Tile {self.player.current_tile}",
-            f"Doors {len(self.doors)} | Power {'ON' if self.floor_power_available else 'OFF'}",
-            *objective_lines,
-            (
-                f"Materials S:{self.placeholder_run.material_counts.get('scrap', 0)} "
-                f"C:{self.placeholder_run.material_counts.get('circuit', 0)} "
-                f"P:{self.placeholder_run.material_counts.get('power_cell', 0)} | Score {self.placeholder_run.score}"
-            ),
-            (
-                f"Q {MODULE_BY_VALUE[self.placeholder_run.module_loadout.equipped_slots[0]].short_name if self.placeholder_run.module_loadout.equipped_slots[0] in MODULE_BY_VALUE else 'EMPTY'} | "
-                f"E {MODULE_BY_VALUE[self.placeholder_run.module_loadout.equipped_slots[1]].short_name if self.placeholder_run.module_loadout.equipped_slots[1] in MODULE_BY_VALUE else 'EMPTY'}"
-            ),
-            prompt_line,
-            "SCAN READY" if self.scan_system.ready else f"SCAN {self.scan_system.cooldown_remaining:0.1f}s",
-            f"F2 Debug {'ON' if self.debug_world_view else 'OFF'} | F3 Perf {'ON' if self.performance_overlay else 'OFF'}",
-            "Space Scan | F Interact | Esc Pause",
-        ]
-        hud_lines = [line for line in hud_lines if line]
-        font = self.fonts["small"]
-        width = 356
-        height = 18 + len(hud_lines) * 24
-        panel = pygame.Rect(12, 12, width, height)
-        self.overlay_surface.fill((0, 0, 0, 0))
-        pygame.draw.rect(self.overlay_surface, (6, 10, 14, 182), panel, border_radius=6)
-        pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, panel, width=1, border_radius=6)
-        self.screen.blit(self.overlay_surface, (0, 0))
-        for index, line in enumerate(hud_lines):
-            color = settings.COLOR_ACCENT if line in ("RESTORE POWER", "SECURITY OVERRIDE", "ECHO CORE EXTRACTION") else (
-                settings.COLOR_TEXT if index < 4 else settings.COLOR_TEXT_MUTED
+            objective_heading = (
+                "ECHO CORE EXTRACTION" if state.floor_number == 3
+                else "SECURITY OVERRIDE" if state.floor_number == 2
+                else "RESTORE POWER"
             )
-            self.screen.blit(font.render(line, True, color), (24, 24 + index * 24))
+            objective_text = state.current_objective_text
+            prompt_line = state.current_prompt
+
+        font = self.fonts["small"]
+        self.overlay_surface.fill((0, 0, 0, 0))
+
+        objective_lines = [f"FLOOR {run.floor}  |  {objective_heading}", objective_text]
+        if prompt_line:
+            objective_lines.append(prompt_line)
+        if self.debug_world_view:
+            objective_lines.append(f"Seed {run.seed} | Tile {self.player.current_tile}")
+        objective_panel = pygame.Rect(12, 12, 430, 22 + len(objective_lines) * 23)
+        pygame.draw.rect(self.overlay_surface, (6, 10, 14, 198), objective_panel, border_radius=7)
+        pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, objective_panel, 1, border_radius=7)
+        for index, line in enumerate(objective_lines):
+            color = settings.COLOR_ACCENT if index == 0 else settings.COLOR_TEXT
+            self.overlay_surface.blit(font.render(line, True, color), (objective_panel.left + 12, objective_panel.top + 10 + index * 23))
+
+        materials = run.material_counts
+        stats_lines = [
+            f"SCORE {run.score}",
+            f"SCRAP {materials.get('scrap', 0)}  CIRCUIT {materials.get('circuit', 0)}  POWER {materials.get('power_cell', 0)}",
+            "SCAN READY" if self.scan_system.ready else f"SCAN {self.scan_system.cooldown_remaining:0.1f}s",
+        ]
+        stats_panel = pygame.Rect(settings.WINDOW_WIDTH - 338, 12, 326, 22 + len(stats_lines) * 23)
+        pygame.draw.rect(self.overlay_surface, (6, 10, 14, 198), stats_panel, border_radius=7)
+        pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, stats_panel, 1, border_radius=7)
+        for index, line in enumerate(stats_lines):
+            color = settings.COLOR_SUCCESS if index == 0 else settings.COLOR_TEXT_MUTED
+            self.overlay_surface.blit(font.render(line, True, color), (stats_panel.left + 12, stats_panel.top + 10 + index * 23))
+
+        self.screen.blit(self.overlay_surface, (0, 0))
+        self.draw_module_hud()
         self.draw_interaction_progress()
         self.draw_context_messages()
+
+    def draw_module_hud(self) -> None:
+        if self.placeholder_run is None:
+            return
+        loadout = self.placeholder_run.module_loadout
+        runtime = self.placeholder_run.module_runtime
+        module_icons = self.visual_assets["module_icons"]
+        assert isinstance(module_icons, dict)
+        font = self.fonts["small"]
+        for slot_index, key_name in enumerate(("Q", "E")):
+            value = loadout.equipped_slots[slot_index]
+            panel = pygame.Rect(12 + slot_index * 206, settings.WINDOW_HEIGHT - 76, 194, 64)
+            self.overlay_surface.fill((0, 0, 0, 0))
+            pygame.draw.rect(self.overlay_surface, (6, 10, 14, 212), panel, border_radius=7)
+            pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT_DIM, panel, 1, border_radius=7)
+            if value in MODULE_BY_VALUE:
+                definition = MODULE_BY_VALUE[value]
+                remaining = runtime.remaining(value)
+                icon_key = definition.icon_key if remaining <= 0.0 else definition.icon_key.replace("_ready", "_cooldown")
+                icon = module_icons[icon_key]
+                assert isinstance(icon, pygame.Surface)
+                self.overlay_surface.blit(icon, (panel.left + 8, panel.top + 8))
+                self.overlay_surface.blit(font.render(f"{key_name}  {definition.short_name}", True, settings.COLOR_TEXT), (panel.left + 62, panel.top + 9))
+                status = "READY" if remaining <= 0.0 else f"{remaining:0.1f}s"
+                color = settings.COLOR_SUCCESS if remaining <= 0.0 else settings.COLOR_WARNING
+                self.overlay_surface.blit(font.render(status, True, color), (panel.left + 62, panel.top + 33))
+                if remaining > 0.0:
+                    fraction = 1.0 - runtime.cooldown_fraction(value)
+                    bar = pygame.Rect(panel.left + 62, panel.bottom - 8, int(118 * fraction), 4)
+                    pygame.draw.rect(self.overlay_surface, settings.COLOR_ACCENT, bar, border_radius=2)
+            else:
+                self.overlay_surface.blit(font.render(f"{key_name}  EMPTY", True, settings.COLOR_TEXT_MUTED), (panel.left + 14, panel.top + 22))
+            self.screen.blit(self.overlay_surface, (0, 0))
 
     def draw_interaction_progress(self) -> None:
         if self.floor_objectives is None:
@@ -1558,14 +1659,20 @@ class Game:
         self.screen.blit(label, (panel.left + 10, panel.top + 7))
 
     def draw_context_messages(self) -> None:
-        if self.floor_objectives is None or not self.floor_objectives.messages:
+        texts: list[str] = []
+        if self.floor_objectives is not None and self.floor_objectives.messages:
+            texts.extend(message.text for message in self.floor_objectives.messages[-2:])
+        if self.module_notice:
+            texts.append(self.module_notice)
+        if not texts:
             return
         font = self.fonts["small"]
-        visible = self.floor_objectives.messages[-3:]
-        y = settings.WINDOW_HEIGHT - 160 - (len(visible) - 1) * 24
-        for message in visible:
-            image = font.render(message.text, True, settings.COLOR_ACCENT)
+        y = settings.WINDOW_HEIGHT - 148 - (len(texts) - 1) * 24
+        for text in texts[-3:]:
+            image = font.render(text, True, settings.COLOR_ACCENT)
             rect = image.get_rect(midtop=(settings.WINDOW_WIDTH // 2, y))
+            shadow = font.render(text, True, (0, 0, 0))
+            self.screen.blit(shadow, rect.move(1, 1))
             self.screen.blit(image, rect)
             y += 24
 
@@ -1672,6 +1779,11 @@ class Game:
                 f"perception {ai_stats['perception_checks_per_second']:0.2f}/s"
             ),
             f"stunned {ai_stats['stunned_creatures']} | active path target count {ai_stats['creatures_with_paths']}",
+            (
+                f"modules devices {self.module_effects.active_device_count} | "
+                f"shock {self.module_effects.diagnostics.shock_pulses} decoy {self.module_effects.diagnostics.decoy_pulses} "
+                f"projector {self.module_effects.diagnostics.projector_scans} wedge {self.module_effects.diagnostics.doors_wedged}"
+            ),
         ]
         if self.floor_objectives is not None:
             state = self.floor_objectives.state

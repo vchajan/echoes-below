@@ -1,6 +1,6 @@
 # Echoes Below Progress
 
-Last updated: 2026-06-12
+Last updated: 2026-06-13
 
 ## Phase Checklist
 
@@ -19,12 +19,12 @@ Last updated: 2026-06-12
 - [x] Phase 12: Floor 2 security objective.
 - [x] Phase 13: Floor 3 Echo Core extraction and victory.
 - [x] Phase 14: Workshop crafting, recipes and persistent two-slot module loadout.
-- [ ] Phase 15: Shock Pulse and Decoy Beacon.
-- [ ] Phase 16: Door Wedge and Scan Projector.
-- [ ] Phase 17: Final HUD, scoring and presentation effects.
-- [ ] Phase 18: Performance audit and stress testing.
-- [ ] Phase 19: Complete QA and regression repair.
-- [ ] Phase 20: Final documentation, presentation and submission package.
+- [x] Phase 15: Shock Pulse and Decoy Beacon.
+- [x] Phase 16: Door Wedge and Scan Projector.
+- [x] Phase 17: Final HUD, scoring and presentation effects.
+- [x] Phase 18: Performance audit and stress testing.
+- [x] Phase 19: Complete QA and regression repair.
+- [x] Phase 20: Final documentation, presentation and submission package.
 
 ## Phase 0 Notes
 
@@ -633,7 +633,7 @@ Last updated: 2026-06-12
 - Added `game/systems/crafting.py` with deterministic workshop selection, target-slot control, crafting, equip/unequip, insufficient-material feedback and Continue/Main Menu actions.
 - Extended `PlaceholderRun` with `ModuleLoadout`; crafted/equipped modules persist between floors and reset on Retry Same Seed or New Run.
 - Replaced the placeholder workshop with a two-by-two recipe card UI, material counters, target-slot highlights, owned/equipped badges, action hints and keyboard controls.
-- Added Q/E loadout display to the gameplay HUD. Active module effects intentionally remain Phase 15/16.
+- Added Q/E loadout display to the gameplay HUD. At the Phase 14 checkpoint, active effects were intentionally deferred to Phases 15/16.
 - Floor completion summaries now archive the current crafted/equipped loadout without coupling workshop state to floor runtime.
 - Updated the end-to-end smoke test to craft Shock Pulse and Decoy Beacon after Floor 1, equip both slots and verify preservation into Floors 2 and 3.
 - Added `tests/test_modules.py`, `tests/test_workshop.py` and `tools/workshop_preview.py`.
@@ -646,9 +646,47 @@ Last updated: 2026-06-12
 - `python -m compileall -q main.py game tests tools`: passed.
 - The workshop preview confirmed crafting does not change score, materials are deducted exactly, three modules can remain owned while only two are equipped, replacing a slot preserves ownership, and the loadout survives the Floor 1-to-Floor 2 workshop transition.
 
-## Phase 14 Known Limitations
+## Historical Phase 14 Checkpoint Limitations
 
-- Q and E show equipped modules during gameplay, but active effects and cooldowns are not implemented yet.
-- Shock Pulse and Decoy Beacon are planned for Phase 15.
-- Door Wedge and Scan Projector are planned for Phase 16.
-- Workshop mouse-card selection is not implemented; the workshop is fully usable with keyboard controls.
+- At the Phase 14 checkpoint, Q/E showed equipped modules but effects and cooldowns were not active yet. Phases 15 and 16 have since implemented all four effects.
+- Workshop mouse-card selection remains intentionally omitted; the workshop is fully usable with keyboard controls.
+
+
+## Final Active Modules, HUD And QA Completed
+
+- Added `ModuleRuntimeState` with independent run-level cooldowns and activation diagnostics.
+- Added `game/systems/module_effects.py` with Shock Pulse, Decoy Beacon, Door Wedge, Scan Projector, floor-local deployed devices and cached effect rendering.
+- Added Q/E activation in normal gameplay while preserving Q/E workshop slot selection.
+- Shock Pulse uses existing LOS blockers and the existing AI stun API; stunned creatures remain physically lethal.
+- Decoy Beacon emits bounded repeated threat events and expires without leaking entities.
+- Door Wedge uses authoritative door blocker states and automatically removes itself after its timer.
+- Scan Projector uses remote fixed-origin DDA scans without consuming the normal Space-scan cooldown.
+- Module cooldowns and crafted loadout survive floor completion, while deployed devices are cleared. Retry Same Seed and New Run reset both ownership and cooldowns.
+- Replaced the debug-heavy normal HUD with objective, score/material, scan and Q/E cooldown panels. F2/F3 retain full developer diagnostics.
+- Extended the complete-run smoke test to craft all four modules, use Shock Pulse and Decoy on Floor 2, use Door Wedge and Scan Projector on Floor 3, and reach Victory.
+- Added `tests/test_module_effects.py`, `tools/module_preview.py`, `tools/performance_audit.py` and `DEFENCE_NOTES.md`.
+
+## Final Verification
+
+- `python -m unittest discover -s tests`: passed with 435 tests in the final container verification run.
+- `python tools/smoke_test.py`: passed through Floor 1, both workshops, Floor 2, Floor 3 and Victory while exercising all modules.
+- Floor 1, Floor 2, Floor 3, workshop and module headless previews passed.
+- `python tools/scan_benchmark.py`: passed for 27 scans of 720 rays; average 10.971 ms, median 11.075 ms and maximum 13.317 ms in the container run.
+- `python tools/performance_audit.py`: 360 gameplay updates; average 0.221 ms, median 0.118 ms and maximum 13.088 ms, including three projector scans and four decoy pulses.
+- `python -m compileall -q main.py game tests tools`: passed.
+- `python tools/generation_test.py`: passed for 450 floors with 0 failures, maximum attempt index 5, average attempt index 1.331 and connectivity ratio 1.000. Re-running it on the target Windows machine remains recommended before presentation.
+
+## Final Preview Outputs
+
+- `artifacts/module_preview_12345_shock.png`
+- `artifacts/module_preview_12345_decoy.png`
+- `artifacts/module_preview_12345_wedge.png`
+- `artifacts/module_preview_12345_projector.png`
+- `artifacts/module_preview_12345_cooldowns.png`
+
+## Final Known Limitations
+
+- Placeholder visuals and absent optional audio remain safe but are not production art.
+- Balance and tension require manual playtesting on the presentation machine.
+- Workshop cards are keyboard-operated.
+- Performance numbers from SDL dummy mode are diagnostic rather than a rendered-FPS guarantee.

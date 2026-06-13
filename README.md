@@ -1,8 +1,8 @@
 # Echoes Below
 
-Echoes Below is planned as a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
+Echoes Below is a school Pygame project: a 2D top-down stealth exploration roguelite about navigating dark underground floors with a scan mechanic.
 
-This repository is complete through Phase 14. It contains the full three-floor one-life run, deterministic objectives, Echo Core extraction and victory, cached assets, procedural generation, dynamic doors, fixed-origin DDA scan occlusion, object and creature echoes, threat-aware creature AI, material pickups, score, workshop crafting, a persistent two-slot module loadout, tests and headless preview tools. The four modules can now be crafted and equipped; their active gameplay effects are implemented in Phases 15 and 16.
+This repository contains the functionally complete three-floor one-life run: deterministic objectives, Echo Core extraction and victory, cached assets, procedural generation, dynamic doors, fixed-origin DDA scan occlusion, object and creature echoes, threat-aware creature AI, material pickups, score, workshop crafting, a persistent two-slot loadout and all four active modules with cooldowns. Placeholder pixel art and silent audio fallbacks remain replaceable without changing gameplay code.
 
 ## Setup
 
@@ -34,13 +34,10 @@ python main.py
 - F3: toggle scan, snapshot and AI diagnostics during PLAYING
 - F6/F7/F8: door debug controls, only while F2 debug mode is active
 - Workshop: Up/Down selects a recipe, Left/Right or Q/E selects a slot, Enter crafts/equips
-
-Planned gameplay controls:
-
-- Space: scan
-- F: interact
-- Q: module slot 1
-- E: module slot 2
+- Space: activate the normal player scan
+- F: hold for generator, relay or containment interaction
+- Q: activate equipped module slot 1
+- E: activate equipped module slot 2
 - Escape: pause
 - F2: debug view
 - F3: performance overlay
@@ -67,11 +64,13 @@ python tools/floor1_preview.py --seed 12345 --headless
 python tools/floor2_preview.py --seed 12345 --headless
 python tools/floor3_preview.py --seed 12345 --headless
 python tools/workshop_preview.py --seed 12345 --headless
+python tools/module_preview.py --seed 12345 --headless
+python tools/performance_audit.py
 python -m py_compile main.py
 python -c "import main; print('main import ok')"
 ```
 
-Floor 3 extraction, victory and workshop crafting are implemented. Active module effects and final HUD/effect polish remain later phases.
+Floor 3 extraction, victory, workshop crafting, active modules, cooldown HUD and final automated QA are implemented. Manual playtesting is still recommended for difficulty and presentation feel.
 
 ## Assets
 
@@ -122,23 +121,23 @@ The player uses the Phase 2 spritesheet animations for idle and walking in all f
 
 Movement collision uses the central tile metadata in `game/world/tiles.py`. `VOID`, `WALL`, `DAMAGED_WALL`, `OBSTACLE` and `PILLAR` block movement; floor variants, doorways and elevator floor tiles are walkable. Out-of-bounds map space is always blocking. Axis-separated resolution allows sliding along free axes and uses bounded substeps to avoid tunnelling on slower frames.
 
-Normal PLAYING mode is intentionally dark as a temporary Phase 5 visibility stand-in. A cached local glow around the player reveals only the immediate area. This is not the final scan mechanic; fixed-origin scan traces and occlusion are still future work.
+Normal PLAYING mode is intentionally dark. A small cached local glow reveals only the immediate area; the fixed-origin scan, fading echoes and deployed Scan Projector provide the main spatial information.
 
 F2 debug mode disables the heavy darkness and draws camera-space diagnostics: tile grid, room boundaries and IDs, graph links, doorway candidates, creature candidates, objective candidates, spawn/elevator markers, player visual rect, player collision rect and current tile.
 
 ## Dynamic Doors
 
-Phase 6 creates dynamic door entities from validated doorway metadata without changing the static tile grid. Doors render separately from the cached floor surface and supply temporary blockers for movement, future scan raycasting, line of sight and future creature navigation.
+Dynamic door entities are created from validated doorway metadata without changing the static tile grid. Doors render separately from the cached floor surface and provide one authoritative blocker profile for movement, scan raycasting, line of sight and creature navigation.
 
 Door types:
 
 - Powered doors are automatic doors. They open when the player enters the approach area while floor power is available, stay open while the approach or doorway is occupied, and close after a delay when clear.
-- Security doors start locked, block movement and future scan, and expose an unlock API. Once unlocked, they behave like powered automatic doors.
+- Security doors start locked, block movement and scan, and expose an unlock API. Once unlocked, they behave like powered automatic doors.
 - Containment doors start locked, remain distinct from security doors, expose a containment unlock API, and then behave as heavier powered doors.
 
-Phase 11 replaces the earlier temporary Floor 1 power rule. Floor 1 now starts with power off; objective placement is validated so both components and the generator are reachable before repair. Powered doors stay closed until the generator is repaired. Phase 12 uses the deterministic Floor 2 security-door candidate for the keycard and relay objective, while Floor 3 still exposes a containment-door candidate for a later phase.
+Floor 1 starts with power off; objective placement is validated so both components and the generator are reachable before repair. Floor 2 uses a deterministic security gate for the keycard-and-relay objective, and Floor 3 uses a deterministic containment gate for the Echo Core objective.
 
-Closed, locked, opening, closing and wedged-closed doors block player movement, future scan, future line of sight and future creature navigation. Open and wedged-open doors block none of those purposes. Closing begins only after the doorway is clear, so doors do not push or trap the player.
+Closed, locked, opening, closing and wedged-closed doors block player movement, scan, line of sight and creature navigation. Open and wedged-open doors block none of those purposes. Closing begins only after the doorway is clear, so doors do not push or trap the player.
 
 Debug controls are active only in F2 mode:
 
@@ -249,7 +248,7 @@ Procedural floors now receive deterministic optional materials:
 
 They are placed on validated walkable tiles away from the spawn, elevator and doorways. Collection is collision-based, idempotent, adds five points and updates the run counters shown in the HUD. Their normal sprites remain hidden outside F2 debug mode; a tiny contact hint appears only at very close range.
 
-The elevator is a scan-detectable entity with locked, unlocked and active states. Its state controls the captured outline colour and animation frame. Phase 11 uses the unlocked elevator to complete Floor 1 and enter the controlled WORKSHOP placeholder.
+The elevator is a scan-detectable entity with locked, unlocked and active states. Its state controls the captured outline colour and animation frame. Floors 1 and 2 return to the workshop; Floor 3 returns to the final Victory screen.
 
 Create deterministic object-echo screenshots with:
 
@@ -293,7 +292,7 @@ Phase 10 adds the authoritative creature states `PATROL`, `INVESTIGATE`, `SEARCH
 - `INVESTIGATE`: entered when a relevant shared threat event is selected. A player scan creates exactly one `PLAYER_SCAN` threat at the fixed scan origin, not one event per ray or trace.
 - `SEARCH`: uncertainty around an investigated point or last known player position. The creature samples nearby valid search points for a limited duration, then returns to patrol.
 - `CHASE`: entered only through direct perception: the player must be within detection range and line of sight must pass through the same wall, corner and dynamic-door blocker rules as scan raycasting. If sight is lost, the creature follows the last known player position briefly, then searches.
-- `STUNNED`: implemented as an API preparation state for later Shock Pulse gameplay. Direct calls such as `creature.stun(duration)` stop movement and preserve collision danger, but no module input or inventory is implemented yet.
+- `STUNNED`: Shock Pulse calls `creature.stun(duration)` for nearby creatures with direct line of sight. Movement stops temporarily, but physical collision remains lethal.
 
 Threat events are stored in `ThreatEventSystem`. The source types are `PLAYER_SCAN`, `GENERATOR`, `RELAY`, `ECHO_CORE`, `SHOCK_PULSE`, `DECOY_BEACON` and `SCAN_PROJECTOR`; player scans create `PLAYER_SCAN` events and Phase 11 generator activation creates one strong `GENERATOR` event. Relevance uses a simple strength, age-decay and distance formula with hearing-radius filtering and hysteresis so creatures do not switch targets for tiny differences.
 
@@ -324,7 +323,7 @@ Generator components and the generator are scan-detectable objects using the sam
 
 When the generator is repaired, the game sets Floor 1 power active, changes the generator to the powered state, adds score, emits exactly one strong `GENERATOR` threat event, enables normal powered-door behaviour and unlocks the elevator. Security and containment doors remain unaffected for later floors.
 
-The elevator starts locked and shows `Elevator offline` before power restoration. After the generator is powered, the elevator changes to unlocked, shows `Press F to enter elevator`, and holding **F** in range completes Floor 1. Completion adds score, clears Floor 1 runtime objects, scans, snapshots, doors, creatures, objectives and threat events, then transitions to WORKSHOP. The workshop displays Floor 1 completion, current score, material counts and the temporary `Crafting will be enabled in a later phase` message. Continue descends through the floor transition and creates Floor 2.
+The elevator starts locked and shows `Elevator offline` before power restoration. After the generator is powered, the elevator changes to unlocked, shows `Press F to enter elevator`, and holding **F** in range completes Floor 1. Completion adds score, clears Floor 1 runtime objects, scans, snapshots, doors, creatures, objectives and threat events, then transitions to the crafting workshop. Continue descends through the floor transition and creates Floor 2 while preserving run-level score, materials, crafted modules, equipment and cooldowns.
 
 F2 debug mode shows objective rooms, entity positions, generator interaction Rect, power/elevator state and generator threat ID. F3 adds objective stage, component count, generator progress, power state, elevator unlock state, objective-entity count and generator activation count.
 
@@ -350,7 +349,7 @@ Phase 12 adds the second floor objective. Floor 2 begins with ordinary facility 
 
 Relay A and Relay B are deterministic scan-detectable terminals in distinct secure rooms. Standing in range and holding **F** for the configured 2.0 second duration activates each relay. Releasing **F**, leaving range, pausing outside gameplay or dying prevents partial progress from leaking forward. Each relay awards score once and emits exactly one strong `RELAY` threat event that existing creatures can investigate through the shared threat system.
 
-After both relays are active, the elevator unlocks and shows `Press F to enter elevator`. Interacting with it completes Floor 2, archives a Floor 2 summary, preserves run seed, score, materials and completed-floor count, clears all active Floor 2 runtime entities, scans, snapshots and threats, then returns to WORKSHOP. Continue after Floor 2 is a controlled placeholder notice for Floor 3; it does not generate Floor 3 in this phase.
+After both relays are active, the elevator unlocks and shows `Press F to enter elevator`. Interacting with it completes Floor 2, archives a Floor 2 summary, preserves run-level progression, clears all active Floor 2 runtime entities, scans, snapshots and threats, then returns to WORKSHOP. Continue descends to the implemented Floor 3 containment and Echo Core objective.
 
 F2 debug mode shows the selected gate edge, public/secure room IDs, security door, keycard, relay locations, relay progress, elevator state and placement validation errors. F3 adds Floor 2 objective stage, keycard/door/relay/elevator status and RELAY threat counts.
 
@@ -403,7 +402,7 @@ Workshop controls:
 - Left/Right or Q/E: select equipment slot 1 or 2.
 - Enter/Space: craft an unowned module, or equip/unequip an owned module in the selected slot.
 
-The first successful craft automatically equips the module in the selected slot. A later module may replace that slot while both remain crafted. The gameplay HUD displays the current Q/E loadout. Phase 14 intentionally does not activate the module effects; Shock Pulse and Decoy Beacon are Phase 15, while Door Wedge and Scan Projector are Phase 16.
+The first successful craft automatically equips the module in the selected slot. A later module may replace that slot while both remain crafted. During gameplay, Q and E activate the equipped modules; the HUD displays readiness, cooldown time and progress for each slot.
 
 Preview the workshop without playing through a floor:
 
@@ -418,3 +417,36 @@ Headless preview output:
 - `artifacts/workshop_preview_12345_two_slots.png`
 - `artifacts/workshop_preview_12345_replacement.png`
 - `artifacts/workshop_preview_12345_floor2.png`
+
+## Workshop, Loadout And Active Module Architecture
+
+- `game/systems/modules.py` contains the four `ModuleType` values, immutable recipes, `ModuleLoadout` ownership/equipment and `ModuleRuntimeState` cooldowns. Ownership and cooldowns are run-level and survive floor transitions; Retry Same Seed and New Run create fresh state.
+- `game/systems/crafting.py` owns only workshop selection and craft/equip actions. Material counters remain authoritative in `PlaceholderRun`; score is never crafting currency.
+- `game/systems/module_effects.py` owns floor-local deployed devices and transient visuals. Floor cleanup removes decoys, projectors and rings without erasing run-level cooldowns.
+- Shock Pulse stuns creatures only inside its radius and through the existing line-of-sight rules. It still creates sound, so other creatures may investigate.
+- Decoy Beacon emits repeated strong `DECOY_BEACON` threats from a fixed deployed position until it expires.
+- Door Wedge delegates passability to the existing authoritative `DynamicDoor` states `WEDGED_OPEN` and `WEDGED_CLOSED`; the wedge expires by delta time and pause freezes it.
+- Scan Projector waits for any current scan wave, then calls `ScanSystem.trigger_remote()`. Remote scans preserve player cooldown, use the same DDA occlusion and can create normal historical snapshots.
+- The gameplay HUD renders cached ready/cooldown icons for Q/E slots, objective state, scan status, score and materials. No gameplay asset is loaded or transformed per frame.
+
+## Active Module Balance
+
+- **Shock Pulse:** 4.5-tile line-of-sight radius, 2.4-second stun, 8-second cooldown. It is an emergency escape tool, not a kill action.
+- **Decoy Beacon:** 8-second device lifetime, 1.5-second pulses, 12-second cooldown. It creates a stronger false target than a normal scan.
+- **Door Wedge:** 8-second wedge, 10-second cooldown and short interaction range. Wedged-open doors preserve escape routes; wedged-closed doors temporarily deny routes.
+- **Scan Projector:** 10-second lifetime, delayed pulse then 2.25-second remote scans, 15-second cooldown. It reveals from a fixed remote origin but also broadcasts threat events.
+
+Preview and performance commands:
+
+```powershell
+python tools/module_preview.py --seed 12345 --headless
+python tools/performance_audit.py
+```
+
+## Final Known Limitations
+
+- Committed art is deterministic placeholder pixel art intended to be replaceable.
+- Audio files may be absent; the asset manager returns safe silent sounds.
+- Difficulty values are functional defaults and should be tuned through manual playtesting.
+- The workshop is keyboard-first; recipe-card mouse selection is not implemented.
+- Dummy-display benchmarks measure computation and update cost, not guaranteed rendered FPS on every computer.
