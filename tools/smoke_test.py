@@ -688,25 +688,22 @@ def main() -> int:
             "Floor 1 completion score rewards were not applied.",
         )
         floor1_score = game.placeholder_run.score
-        game.placeholder_run.material_counts = {"scrap": 3, "circuit": 3, "power_cell": 3}
-        game.workshop_system.selected_index = 0
-        game.workshop_system.select_slot(0)
-        game.activate_workshop_selection()
-        game.workshop_system.selected_index = 1
-        game.workshop_system.select_slot(1)
-        game.activate_workshop_selection()
-        require(
-            game.placeholder_run.module_loadout.is_crafted(ModuleType.SHOCK_PULSE),
-            "Workshop did not craft Shock Pulse.",
-        )
-        require(
-            game.placeholder_run.module_loadout.is_crafted(ModuleType.DECOY_BEACON),
-            "Workshop did not craft Decoy Beacon.",
-        )
+        game.placeholder_run.material_counts = {"scrap": 8, "circuit": 8, "power_cell": 8}
+        for module_index in range(4):
+            game.workshop_system.selected_index = module_index
+            game.workshop_system.select_slot(module_index % 2)
+            game.activate_workshop_selection()
+        game.placeholder_run.module_loadout.equip(ModuleType.SHOCK_PULSE, 0)
+        game.placeholder_run.module_loadout.equip(ModuleType.DECOY_BEACON, 1)
+        for module_type in ModuleType:
+            require(
+                game.placeholder_run.module_loadout.is_crafted(module_type),
+                f"Workshop did not craft {module_type.value}.",
+            )
         require(
             game.placeholder_run.module_loadout.equipped_slots
             == [ModuleType.SHOCK_PULSE.value, ModuleType.DECOY_BEACON.value],
-            "Workshop did not preserve the two equipped slots.",
+            "Workshop did not preserve the selected two-slot loadout.",
         )
         require(game.placeholder_run.score == floor1_score, "Crafting changed score.")
         floor1_materials = dict(game.placeholder_run.material_counts)
@@ -741,11 +738,30 @@ def main() -> int:
         require(game.elevator_entity.state is ElevatorState.LOCKED, "Floor 2 elevator did not start locked.")
 
         freeze_creatures(game)
+        module_target = game.creatures[0]
+        place_player_at(game, find_visible_tile_for_creature(game, module_target))
+        require(game.activate_module_slot(0), "Shock Pulse did not activate from Q slot.")
+        require(module_target.ai is not None and module_target.ai.state is CreatureState.STUNNED, "Shock Pulse did not stun a visible creature.")
+        require(game.activate_module_slot(1), "Decoy Beacon did not activate from E slot.")
+        require(len(game.module_effects.decoys) == 1, "Decoy Beacon device was not deployed.")
+        game.update_gameplay(settings.DECOY_BEACON_PULSE_INTERVAL + 0.01, pygame.Vector2(0, 0))
+        require(
+            any(event.source_type is ThreatSourceType.DECOY_BEACON for event in game.threat_events.active_events),
+            "Decoy Beacon did not emit a threat event.",
+        )
         complete_floor2_objective(game)
         require(
             game.placeholder_run.module_loadout.snapshot() == floor1_modules,
             "Floor 2 completion did not preserve module loadout into workshop.",
         )
+        require(game.module_effects.active_device_count == 0, "Floor 2 cleanup retained deployed module devices.")
+        require(
+            not game.placeholder_run.module_runtime.is_ready(ModuleType.DECOY_BEACON),
+            "Floor transition incorrectly cleared the Decoy cooldown.",
+        )
+        game.placeholder_run.module_loadout.equip(ModuleType.DOOR_WEDGE, 0)
+        game.placeholder_run.module_loadout.equip(ModuleType.SCAN_PROJECTOR, 1)
+        floor3_modules = game.placeholder_run.module_loadout.snapshot()
 
         game.workshop_system.selected_index = game.workshop_system.CONTINUE_INDEX
         game.activate_workshop_selection()
@@ -759,8 +775,23 @@ def main() -> int:
         require(game.floor_objectives.state.floor_number == 3, "Floor 3 objective state was not active.")
         require(game.floor_objectives.placement.validation_errors == [], "Floor 3 placement validation failed.")
         require(len(game.creatures) == 2, "Floor 3 did not begin with two creatures.")
+        require(game.placeholder_run.module_loadout.snapshot() == floor3_modules, "Floor 3 did not preserve the workshop loadout.")
         freeze_creatures(game)
+        wedge_door = find_powered_door(game)
+        wedge_door.force_open()
+        place_player_at(game, approach_tile_for_door(game, wedge_door))
+        require(game.activate_module_slot(0), "Door Wedge did not activate from Q slot.")
+        require(wedge_door.state is DoorState.WEDGED_OPEN, "Door Wedge did not preserve the open door state.")
+        require(game.activate_module_slot(1), "Scan Projector did not activate from E slot.")
+        require(len(game.module_effects.projectors) == 1, "Scan Projector device was not deployed.")
+        game.update_gameplay(settings.SCAN_PROJECTOR_ACTIVATION_DELAY + 0.01, pygame.Vector2(0, 0))
+        require(game.scan_system.active_wave is not None, "Scan Projector did not emit a remote scan.")
+        require(
+            any(event.source_type is ThreatSourceType.SCAN_PROJECTOR for event in game.threat_events.active_events),
+            "Scan Projector did not emit a threat event.",
+        )
         complete_floor3_objective(game)
+        require(game.module_effects.active_device_count == 0, "Victory cleanup retained module devices.")
 
         game.request_quit()
         game.run_one_frame(1.0 / settings.FPS)

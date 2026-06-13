@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any
 
-from game.systems.modules import ModuleLoadout
+from game.systems.modules import ModuleLoadout, ModuleRuntimeState
 
 
 class GameState(Enum):
@@ -32,6 +32,7 @@ class PlaceholderRun:
     materials_collected: int = 0
     floor_completion_summaries: dict[int, dict[str, Any]] = field(default_factory=dict)
     module_loadout: ModuleLoadout = field(default_factory=ModuleLoadout)
+    module_runtime: ModuleRuntimeState = field(default_factory=ModuleRuntimeState)
 
     def reset_same_seed(self) -> "PlaceholderRun":
         return PlaceholderRun(
@@ -45,4 +46,5 @@ class PlaceholderRun:
             materials_collected=0,
             floor_completion_summaries={},
             module_loadout=ModuleLoadout(),
+            module_runtime=ModuleRuntimeState(),
         )

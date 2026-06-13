@@ -153,7 +153,18 @@ class DynamicDoor(pygame.sprite.Sprite):
     ) -> None:
         entity_rects = [rect for rect in (player_rect, *tuple(other_entity_rects)) if rect is not None]
 
-        if self.is_wedged or self.state is DoorState.LOCKED:
+        if self.is_wedged:
+            if self.wedge_remaining is not None:
+                self.wedge_remaining = max(0.0, self.wedge_remaining - max(0.0, dt))
+                if self.wedge_remaining <= 0.0:
+                    self.remove_wedge()
+                else:
+                    self._refresh_image()
+                    return
+            else:
+                self._refresh_image()
+                return
+        if self.state is DoorState.LOCKED:
             self._refresh_image()
             return
 

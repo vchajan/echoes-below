@@ -62,7 +62,7 @@ Data flows from input events into the current state, then into player/module act
 The implemented project uses the `game/` package rather than the early `src/` placeholder tree. Phase 6 door and blocker code lives in:
 
 - `game/entities/door.py`: dynamic door type, state, animation, timers, collision and lock/wedge APIs.
-- `game/world/blockers.py`: dynamic blocker registry for movement, future scan, future line of sight and future creature navigation queries.
+- `game/world/blockers.py`: dynamic blocker registry for movement, scan, line-of-sight and creature-navigation queries.
 - `game/world/door_generation.py`: deterministic conversion from validated doorway metadata to dynamic doors.
 - `game/world/navigation.py`: small future-facing navigation helpers.
 
@@ -85,9 +85,9 @@ Doors are rendered separately from the cached static floor surface. The static t
 13. Phase 12: Floor 2 security objective with keycard, security gate, two relays, relay threats and elevator completion.
 14. Phase 13: Floor 3 extraction and victory.
 15. Phase 14: workshop crafting, material recipes, persistent ownership and two equipped module slots.
-16. Phase 15: Shock Pulse and Decoy Beacon active effects.
-17. Phase 16: Door Wedge and Scan Projector active effects.
-18. Phases 17-20: HUD/effects, performance, QA and submission documentation.
+16. Phase 15: Shock Pulse and Decoy Beacon active effects. Completed.
+17. Phase 16: Door Wedge and Scan Projector active effects. Completed.
+18. Phases 17-20: HUD/effects, performance, QA and submission documentation. Completed.
 
 ## Automated Tests
 
@@ -126,8 +126,8 @@ Static geometry is raycast once when Space is pressed, never every frame. The ac
 - `game/entities/scan_objects.py` defines animated scan-detectable materials and the elevator entity. It exposes fixed IDs, world positions and cached current outline frames without coupling entities to the main application.
 - `game/systems/snapshots.py` owns entity-front crossing checks, one-evaluation-per-scan tracking, line-of-sight validation, copied fixed-position echoes, fade/expiry and rendering.
 - `game/world/content_generation.py` deterministically places materials into validated candidate rooms and creates the elevator from generated-floor metadata.
-- `ScanSystem.last_wave_step` exposes the previous/current wave annulus for one update, allowing object and future creature detection without recalculating static rays.
-- Run material counters remain simple dictionary data in `PlaceholderRun`; the later workshop can consume them without changing pickup behaviour.
+- `ScanSystem.last_wave_step` exposes the previous/current wave annulus for one update, allowing object and moving-creature detection without recalculating static rays.
+- Run material counters remain simple dictionary data in `PlaceholderRun`; the workshop consumes them without changing pickup behaviour.
 
 
 ## Phase 9 Creature Architecture Notes
@@ -155,8 +155,8 @@ Static geometry is raycast once when Space is pressed, never every frame. The ac
 - `Game.prepare_generated_floor` creates Floor 1 objective content once after static content and doors exist. It reserves material, door, creature, spawn and elevator tiles so objectives do not overlap existing content.
 - Objective placement uses existing generated room-distance groups and deterministic candidate ordering. Reachability checks use `navigation.astar_path` with `BlockerPurpose.MOVEMENT`, so components and the generator must be reachable while Floor 1 powered doors are still closed.
 - `Game.update_gameplay` passes continuous F-state into the objective system after scan snapshots are evaluated, preserving historical component echoes before collision pickup removes the source entity.
-- Generator repair emits exactly one strong `GENERATOR` threat event through `ThreatEventSystem`, sets Floor 1 power active, updates powered doors, unlocks the existing elevator entity and leaves security/containment doors for later phases.
-- Floor completion clears floor runtime objects, scans, snapshots, objectives, doors, creatures and threat events while preserving run-level seed, score, elapsed time, restart count and material counters for the WORKSHOP placeholder.
+- Generator repair emits exactly one strong `GENERATOR` threat event through `ThreatEventSystem`, sets Floor 1 power active, updates powered doors, unlocks the existing elevator entity while security and containment doors remain controlled by their own floor objectives.
+- Floor completion clears floor runtime objects, scans, snapshots, objectives, doors, creatures and threat events while preserving run-level seed, score, elapsed time, restart count and material counters, crafted modules and module cooldowns for the WORKSHOP state.
 
 ## Phase 12 Floor 2 Objective Architecture Notes
 
@@ -172,10 +172,30 @@ Static geometry is raycast once when Space is pressed, never every frame. The ac
 
 ## Phase 14 Workshop And Loadout Architecture Notes
 
-- `game/systems/modules.py` contains the four `ModuleType` values, immutable recipe/display definitions and `ModuleLoadout`. The loadout owns crafted module IDs and two unique equipped slots, but no active-effect timers.
+- `game/systems/modules.py` contains the four `ModuleType` values, immutable recipe/display definitions, `ModuleLoadout` ownership/equipment and `ModuleRuntimeState` cooldowns.
 - `game/systems/crafting.py` contains `WorkshopSystem`. It owns only workshop UI selection, target slot and action messages; material counters and module ownership remain run-level data.
 - `PlaceholderRun.module_loadout` persists through `_clear_floor_runtime()` and floor transitions. `reset_same_seed()` creates a fresh loadout, matching the one-life restart rule.
 - Crafting subtracts material counters atomically after affordability checks. Score and progression are never crafting currency.
 - Replacing an equipped module only changes a slot reference; the replaced module remains crafted. The same module cannot occupy both slots.
 - `Game.render_workshop()` renders cached module icons and ordinary text/rectangles. It performs no asset loading or recipe mutation.
-- Phase 15 and Phase 16 will layer runtime cooldown/effect state over the stable crafted/equipped contract rather than changing workshop ownership.
+- Active effects layer over the stable crafted/equipped contract through `ModuleEffectSystem`; workshop ownership remains independent from floor-local devices and effects.
+
+
+## Final Module Runtime Architecture Notes
+
+- `ModuleLoadout` answers only ownership and equipment; `ModuleRuntimeState` answers only run-level cooldowns. This avoids mixing workshop mutations with floor effects.
+- `ModuleEffectSystem` owns deployed decoys/projectors and visual pulse rings. It is reset on floor cleanup, while `PlaceholderRun.module_runtime` survives into the next floor.
+- Activation is routed by `Game.activate_module_slot()`. A successful result alone starts a cooldown; failed context actions do not consume it.
+- Shock Pulse reuses `has_line_of_sight()` and `CreatureAI.apply_stun()`. No second perception or stun implementation exists.
+- Door Wedge reuses `DynamicDoor.wedge()` and the shared blocker profile, so player collision, creature navigation, scan and LOS remain consistent.
+- Scan Projector reuses `ScanSystem._start_scan()` through `trigger_remote()`. It waits for an active wave and does not alter the normal player cooldown.
+- Decoy and projector threats use the shared bounded `ThreatEventSystem`; AI relevance and hysteresis remain unchanged.
+- Rendering uses cached device images, cached outline images and one reusable transparent effect surface.
+
+## Final QA Strategy
+
+- Unit tests isolate cooldowns, LOS-limited stun, decoy pulse/expiry, timed wedge semantics, remote scan cooldown independence and reset behaviour.
+- The complete smoke test validates the three-floor run and all four module actions.
+- Headless previews provide deterministic visual evidence without requiring navigation through random maps.
+- `performance_audit.py` measures update cost with active decoy/projector systems; `scan_benchmark.py` separately measures DDA scan computation.
+- The 450-floor generation stress test passed in the final container run and should be repeated on the target Windows machine before presentation.

@@ -20,6 +20,7 @@ class ModuleDefinition:
     description: str
     recipe: Mapping[str, int]
     icon_key: str
+    cooldown: float
 
 
 MODULE_DEFINITIONS: tuple[ModuleDefinition, ...] = (
@@ -27,33 +28,37 @@ MODULE_DEFINITIONS: tuple[ModuleDefinition, ...] = (
         ModuleType.SHOCK_PULSE,
         "Shock Pulse",
         "PULSE",
-        "Stuns nearby visible creatures.",
+        "Stuns nearby creatures with direct line of sight.",
         {"circuit": 1, "power_cell": 1},
         "shock_pulse_ready",
+        8.0,
     ),
     ModuleDefinition(
         ModuleType.DECOY_BEACON,
         "Decoy Beacon",
         "DECOY",
-        "Creates a temporary false signal.",
+        "Creates a temporary false signal that attracts creatures.",
         {"scrap": 1, "circuit": 1},
         "decoy_beacon_ready",
+        12.0,
     ),
     ModuleDefinition(
         ModuleType.DOOR_WEDGE,
         "Door Wedge",
         "WEDGE",
-        "Temporarily locks a door in place.",
+        "Temporarily locks the nearest open or closed door in place.",
         {"scrap": 2},
         "door_wedge_ready",
+        10.0,
     ),
     ModuleDefinition(
         ModuleType.SCAN_PROJECTOR,
         "Scan Projector",
         "PROJECTOR",
-        "Deploys a delayed remote scan.",
+        "Deploys a remote device that emits repeated scans.",
         {"scrap": 1, "circuit": 1, "power_cell": 1},
         "scan_projector_ready",
+        15.0,
     ),
 )
 
@@ -70,12 +75,68 @@ class CraftResult:
 
 
 @dataclass
-class ModuleLoadout:
-    """Run-level ownership and two-slot equipment state.
+class ModuleRuntimeState:
+    """Run-level module cooldown state.
 
-    Active effects and cooldowns intentionally belong to later phases. This object
-    only owns persistent crafting/equipment choices between floors.
+    Cooldowns intentionally survive floor transitions and workshop visits. A new
+    run or Retry Same Seed creates a fresh instance, clearing all cooldowns.
+    Deployed world objects live in ModuleEffectSystem and are floor-specific.
     """
+
+    cooldown_remaining: dict[str, float] = field(
+        default_factory=lambda: {definition.module_type.value: 0.0 for definition in MODULE_DEFINITIONS}
+    )
+    activation_counts: dict[str, int] = field(
+        default_factory=lambda: {definition.module_type.value: 0 for definition in MODULE_DEFINITIONS}
+    )
+
+    def update(self, dt: float) -> None:
+        dt = max(0.0, float(dt))
+        for key in tuple(self.cooldown_remaining):
+            self.cooldown_remaining[key] = max(0.0, self.cooldown_remaining[key] - dt)
+
+    def is_ready(self, module_type: ModuleType | str) -> bool:
+        return self.remaining(module_type) <= 0.0
+
+    def remaining(self, module_type: ModuleType | str) -> float:
+        value = self._value(module_type)
+        return max(0.0, float(self.cooldown_remaining.get(value, 0.0)))
+
+    def cooldown_fraction(self, module_type: ModuleType | str) -> float:
+        value = self._value(module_type)
+        total = MODULE_BY_VALUE[value].cooldown
+        if total <= 0.0:
+            return 0.0
+        return max(0.0, min(1.0, self.remaining(value) / total))
+
+    def start_cooldown(self, module_type: ModuleType | str) -> None:
+        value = self._value(module_type)
+        self.cooldown_remaining[value] = MODULE_BY_VALUE[value].cooldown
+        self.activation_counts[value] = self.activation_counts.get(value, 0) + 1
+
+    def clear(self) -> None:
+        for value in MODULE_BY_VALUE:
+            self.cooldown_remaining[value] = 0.0
+            self.activation_counts[value] = 0
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "cooldowns": dict(self.cooldown_remaining),
+            "activations": dict(self.activation_counts),
+        }
+
+    @staticmethod
+    def _value(module_type: ModuleType | str) -> str:
+        if isinstance(module_type, ModuleType):
+            return module_type.value
+        if module_type not in MODULE_BY_VALUE:
+            raise ValueError(f"Unknown module type: {module_type}")
+        return module_type
+
+
+@dataclass
+class ModuleLoadout:
+    """Run-level ownership and two-slot equipment state."""
 
     crafted_modules: set[str] = field(default_factory=set)
     equipped_slots: list[str | None] = field(default_factory=lambda: [None, None])

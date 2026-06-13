@@ -124,7 +124,65 @@ class ScanSystem:
         *,
         session_time: float = 0.0,
     ) -> bool:
-        if not self.ready:
+        return self._start_scan(
+            origin,
+            floor,
+            dynamic_blockers,
+            tile_size,
+            session_time=session_time,
+            source_type="player_scan",
+            strength=1.0,
+            require_ready=True,
+            require_idle=False,
+            apply_cooldown=True,
+        )
+
+    def trigger_remote(
+        self,
+        origin: pygame.Vector2 | tuple[float, float],
+        floor: TileFloor,
+        dynamic_blockers: DynamicBlockerRegistry | None,
+        tile_size: int,
+        *,
+        session_time: float = 0.0,
+        source_type: str = "remote_scan",
+        strength: float = 1.0,
+    ) -> bool:
+        """Start a device scan without consuming the player's Space cooldown.
+
+        Remote devices wait for the current wave to finish instead of replacing it.
+        Existing traces remain independent and continue fading.
+        """
+        return self._start_scan(
+            origin,
+            floor,
+            dynamic_blockers,
+            tile_size,
+            session_time=session_time,
+            source_type=source_type,
+            strength=strength,
+            require_ready=False,
+            require_idle=True,
+            apply_cooldown=False,
+        )
+
+    def _start_scan(
+        self,
+        origin: pygame.Vector2 | tuple[float, float],
+        floor: TileFloor,
+        dynamic_blockers: DynamicBlockerRegistry | None,
+        tile_size: int,
+        *,
+        session_time: float,
+        source_type: str,
+        strength: float,
+        require_ready: bool,
+        require_idle: bool,
+        apply_cooldown: bool,
+    ) -> bool:
+        if require_ready and not self.ready:
+            return False
+        if require_idle and self.active_wave is not None:
             return False
 
         scan_id = self._next_scan_id
@@ -152,13 +210,14 @@ class ScanSystem:
             max_radius=self.config.max_radius,
             wave_speed=self.config.wave_speed,
         )
-        self.cooldown_remaining = self.config.cooldown
+        if apply_cooldown:
+            self.cooldown_remaining = self.config.cooldown
         self._revealed_keys.clear()
         self.threat_events.append(
             ScanThreatEvent(
                 origin=(float(fixed_origin.x), float(fixed_origin.y)),
-                source_type="player_scan",
-                strength=1.0,
+                source_type=source_type,
+                strength=strength,
                 session_time=session_time,
                 scan_id=scan_id,
             )
